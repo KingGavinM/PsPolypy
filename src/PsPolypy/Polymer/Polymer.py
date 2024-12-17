@@ -1,4 +1,3 @@
-import copy
 import hashlib
 import lzma
 import pickle
@@ -24,7 +23,7 @@ import matplotlib.pyplot as plt
 import skan
 import networkx as nx
 
-__all__ = ['Particle', 'Polydat', 'Polydat_Multi']
+__all__ = ['Particle', 'Polydat']
 
 class Particle():
     '''
@@ -383,802 +382,15 @@ class Particle():
         The Tan-Tan correlation of the particle.
         '''
         return self._tantan_correlations
-
+   
 class Polydat():
     '''
-    Polymer data class. Used for processing a single polymer field image. Includes the polymer full field image, list of 
-    polymer particles, and various methods for analysis.
-
-    Attributes:
-        image (np.ndarray):
-            The full image image of the polymer data.
-        resolution (float):
-            The resolution of the image in nanometers per pixel.
-        particles (list):
-            List of Particle objects.
-        metadata (dict):
-            The metadata ssociated with the polymer image. Key-value pairs of metadata.
-    '''
-    def __init__(self,
-                 image: np.ndarray = None,
-                 resolution: float = None,
-                 **metadata: Any):
-        '''
-        Initialization method for the Polydat object.
-
-        Args:
-            image (np.ndarray):
-                The full field image array of the polymer data.
-            resolution (float):
-                The resolution of the image in nanometers per pixel.
-            metadata (dict):
-                The metadata associated with the polymer image. Key-value pairs of metadata.
-        Returns:
-            None
-        '''
-        #Set the image attribute.
-        self._image = image
-
-        # Set the resolution attribute.
-        self._resolution = resolution
-
-        # Set the metadata attribute.
-        self._metadata = metadata
-
-        # Set the particles attribute.
-        self._particles = []
-
-        # Set the number of particles attribute.
-        self._num_particles = 0
-
-        # Set the contour lengths attribute.
-        self._contour_lengths = None
-
-        # Set the contour sampling attribute.
-        self._contour_sampling = None
-
-        # Set the mean Tan-Tan correlation attribute.
-        self._mean_tantan_correlation = None
-
-        # Set the percentile threshold attribute.
-        self._percentile_threshold = None
-
-        # Set the persistence length attribute.
-        self._pl = 0
-
-        # Set the persistence length covariance attribute.
-        self._plcov = 0
-
-    @classmethod
-    def from_image(cls,
-                   filepath: str,
-                   resolution: float,
-                   **metadata: Any) -> 'Polydat':
-        '''
-        Create an instance of the Polydat object from an image file.
-
-        Args:
-            filepath (str):
-                The file path to the image file.
-            resolution (float):
-                The resolution of the image in nanometers per pixel.
-            metadata (dict):
-                The metadata associated with the polymer image. Key-value pairs of metadata.
-
-        Returns:
-            Polydat:
-                The Polydat object.
-        '''
-        # Load the image file.
-        with Image.open(filepath) as img:
-            grayscale = img.convert('L')
-            image = np.array(grayscale)/255.0
-        
-        # Create the Polydat object.
-        return cls(image = image, resolution = resolution, **metadata)
-
-    def __exp_decay(self, x, Lp):
-        '''
-        Exponential decay function for curve fitting.
-
-        Args:
-            x (float):
-                The x value.
-            Lp (float):
-                The persistence length.
-        Returns:
-            float:
-                The exponential decay value.
-        '''
-        return np.exp(-x/(2*Lp))
-
-    #############################
-    ##### Save/Load Methods #####
-    #############################
-
-    @staticmethod
-    def _hash_file(filepath: str) -> str:
-        '''
-        Calculates the sha256 hash of a file.
-
-        Args:
-            filepath (str):
-                The path to the file to hash.
-        Returns:
-            str:
-                The sha256 hash of the file.
-        '''
-        # Initialize the hash object.
-        sha256 = hashlib.sha256()
-        with open(filepath, 'rb') as file:
-            # Read the file in chunks and update the hash object.
-            for chunk in iter(lambda: file.read(4096), b''):
-                sha256.update(chunk)
-        # Return the hexdigest of the hash object.
-        return sha256.hexdigest()
-    
-    def save_pickle(self,
-                    filepath: str,
-                    hash: bool = True) -> None:
-        '''
-        Saves the Polydat object to a pickle file.
-
-        Args:
-            filepath (str):
-                The path to save the pickle file.
-            hash (bool):
-                Whether or not to save the sha256 hash of the file. Default is True.
-        Returns:
-            None
-        '''
-        # Save the pickle file.
-        with open(filepath, 'wb') as file:
-            pickle.dump(self, file)
-        
-        # Save the hash of the file.
-        if hash:
-            hash_str = self._hash_file(filepath)
-            with open(f'{filepath}.sha256', 'w') as file:
-                file.write(hash_str)
-        else:
-            # Warn the user that hashing is disabled.
-            ### Todo, implement logging.
-            pass
-
-    @classmethod
-    def load_pickle(cls,
-                    filepath: str,
-                    verify_hash: bool = True) -> 'Polydat':
-        '''
-        Loads a Polydat object from a pickle file. If verify_hash is True, the sha256 hash of the file will be checked 
-        against the hash file with the same name as the pickle file and the extension .sha256. If the hashes do not match,
-        a ValueError will be raised. If verify_hash is False, the hash will not be checked. Pickles are not
-        robust against eroneous or maliciously constructed data. It is recommended that you never unpack data recieved
-        from untrusted or unauthenticated sources. See https://docs.python.org/3/library/pickle.html.
-
-        Args:
-            filepath (str):
-                The path to the pickle file.
-            verify_hash (bool):
-                Whether or not to verify the hash of the file. Default is True.
-        Returns:
-            SimAFM_Stack:
-                The loaded Polydat object.
-        '''
-        # Verify the hash of the file
-        if verify_hash:
-            hash_str = cls._hash_file(filepath)
-
-            # Try to open the hash file. If it does not exist, raise a FileNotFoundError.
-            try:
-                with open(f'{filepath}.sha256', 'r') as file:
-                    file_hash = file.read()
-            except FileNotFoundError:
-                # Todo, implement logging.
-                raise FileNotFoundError(f'Hash file not found. Cannot verify the integrity of the pickle file. Verify the integrity of the file manually or disable hash verification.')
-            
-            # Check if the hash of the file matches the hash in the hash file. If not, raise a ValueError.
-            if hash_str != file_hash:
-                # Todo, implement logging.
-                raise ValueError(f'Hash mismatch. Cannot verify the integrity of the pickle file. Verify the integrity of the file manually or disable hash verification.')
-            
-            # Load the pickle file.
-            with open(filepath, 'rb') as file:
-                obj = pickle.load(file)
-
-        else:
-            # Warn the user that hash verification is disabled.
-            # Todo, implement logging.
-            
-            # Load the pickle file.
-            with open(filepath, 'rb') as file:
-                obj = pickle.load(file)
-
-        return obj
-    
-    def save_lzma(self,
-                  filepath: str,
-                  hash: bool = True) -> None:
-        '''
-        Saves the SimAFM_Stack object to a lzma compressed pickle file.
-
-        Args:
-            filepath (str):
-                The path to save the lzma compressed pickle file.
-            hash (bool):
-                Whether or not to save the sha256 hash of the file. Default is True.
-        Returns:
-            None       
-        '''
-        # Save the lzma compressed pickle file.
-        with lzma.open(filepath, 'wb') as file:
-            pickle.dump(self, file)
-        
-        # Save the hash of the file.
-        if hash:
-            hash_str = self._hash_file(filepath)
-            with open(f'{filepath}.sha256', 'w') as file:
-                file.write(hash_str)
-        else:
-            # Warn the user that hashing is disabled.
-            # Todo, implement logging.
-            pass
-    
-    @classmethod
-    def load_lzma(cls,
-                  filepath: str,
-                  verify_hash: bool = True) -> 'Polydat':
-        '''
-        Loads a Polydat object from a lzma compressed pickle file. If verify_hash is True, the sha256 hash of the file will be checked 
-        against the hash file with the same name as the lzma file and the extension .sha256. If the hashes do not match,
-        a ValueError will be raised. If verify_hash is False, the hash will not be checked. Pickle objects are not
-        robust against eroneous or maliciously constructed data. It is recommended that you never unpack data recieved
-        from untrusted or unauthenticated sources. See https://docs.python.org/3/library/pickle.html.
-
-        Args:
-            filepath (str):
-                The path to the lzma compressed pickle file.
-            verify_hash (bool):
-                Whether or not to verify the hash of the file. Default is True.
-        Returns:
-            SimAFM_Stack:
-                The loaded SimAFM_Stack object.
-        '''
-        # Verify the hash of the file
-        if verify_hash:
-            hash_str = cls._hash_file(filepath)
-
-            # Try to open the hash file. If it does not exist, raise a FileNotFoundError.
-            try:
-                with open(f'{filepath}.sha256', 'r') as file:
-                    file_hash = file.read()
-            except FileNotFoundError:
-                # Todo, implement logging.
-                raise FileNotFoundError(f'Hash file not found. Cannot verify the integrity of the lzma file. Verify the integrity of the file manually or disable hash verification.')
-            
-            # Check if the hash of the file matches the hash in the hash file. If not, raise a ValueError.
-            if hash_str != file_hash:
-                # Todo, implement logging.
-                raise ValueError(f'Hash mismatch. Cannot verify the integrity of the lzma file. Verify the integrity of the file manually or disable hash verification.')
-            
-            # Load the lzma file.
-            with lzma.open(filepath, 'rb') as file:
-                obj = pickle.load(file)
-        
-        else:
-            # Warn the user that hash verification is disabled.
-            # Todo, implement logging.
-            
-            # Load the lzma file.
-            with lzma.open(filepath, 'rb') as file:
-                obj = pickle.load(file)
-
-        return obj
-    
-    ########################
-    ##### Main Methods #####
-    ########################
-
-    def load_image(self,
-                   filepath,
-                   resolution):
-        '''
-        Load an image file into the image attribute.
-
-        Args:
-            filepath (str):
-                The file path to the image file.
-            resolution (float):
-                The resolution of the image in nanometers per pixel.
-        Returns:
-            None
-        '''
-        with Image.open(filepath) as img:
-            grayscale = img.convert('L')
-            self._image = np.array(grayscale)/255.0
-        self._resolution = resolution
-
-    def upscale_image(self,
-                      magnification: float,
-                      order = 3):
-        '''
-        Upscale the full field image by a given magnification factor and interpolation order. The image is interpolated
-        using the skimage.transform.resize function.
-        
-        Args:
-            magnification (float):
-                The magnification factor to upscale the image by. In theory, a floating point number can be used,
-                but integer values are recommended. For example, a magnification factor of 2 will double the resolution.
-            order (int):
-                The order of the interpolation. Default is 3.
-        '''
-        # Check to see if the image has been upscaled. If so, raise a ValueError.
-        if self._metadata.get('upscaled', False):
-            raise ValueError('Image has already been upscaled. Interpolating further may have unexpected results.')
-        
-        # Calculate the new resolution.
-        new_resolution = self._resolution/magnification
-
-        # Calculate the new shape of the image.
-        new_shape = (self._image.shape[0]*magnification, self._image.shape[1]*magnification)
-
-        # Upscale the image.
-        self._image = resize(self._image, new_shape, order = order)
-
-        # Update the resolution.
-        self._resolution = new_resolution
-
-        # Update the metadata so the user knows the image has been upscaled.
-        self._metadata['upscaled'] = True
-        self._metadata['magnification'] = magnification
-
-    def segment_particles(self,
-                          minimum_area = 10,
-                          padding = 1):
-        '''
-        Segment the particles in the full field image. A otsu threshold is applied to separate the particles from the 
-        background, connected regions are labeled, and bounding boxes are calculated for each particle. The Particle objects
-        are stored as a list in the particles attribute.
-
-        Args:
-            minimum_area (int):
-                The minimum area of a particle in pixels. Default 10. Any particle with an area less than this value will
-                be discarded.
-            padding (int):
-                The number of pixels to pad the bounding box of the particle. Default is 1.
-        Returns:
-            None
-        '''
-        # Apply the otsu threshold, and create the binary mask.
-        threshold = threshold_otsu(self._image)
-        binary_mask = self._image > threshold
-
-        # Label the connected regions.
-        labeled = label(binary_mask)
-
-        # Get the region properties.
-        regions = regionprops(labeled)
-
-        # Create the particles list.
-        self._particles = []
-        # Set the number of particles attribute.
-        self._num_particles = 0
-
-        for region in regions:
-            # Get the bounding box.
-            bbox = region.bbox
-
-            # Pad the bounding box.
-            bbox = (bbox[0] - padding, bbox[1] - padding, bbox[2] + padding, bbox[3] + padding)
-
-            # Skipping particles whose bounding box touches the edge of the image.
-            if bbox[0] <= 0 or bbox[1] <= 0 or bbox[2] >= self._image.shape[0] or bbox[3] >= self._image.shape[1]:
-                continue
-
-            # Skipping particles whose area is less than the minimum area.
-            if region.area < minimum_area:
-                continue
-            
-            # Get the image of the particle.
-            particle_image = self._image[bbox[0]:bbox[2], bbox[1]:bbox[3]]
-            # Get the binary mask of the particle.
-            particle_mask = labeled[bbox[0]:bbox[2], bbox[1]:bbox[3]] == region.label
-
-            # Create the Particle object.
-            particle = Particle(image = particle_image,
-                                resolution = self._resolution,
-                                bbox = bbox,
-                                binary_mask = particle_mask,
-                                particle_id = self._num_particles)
-        
-            # Append the Particle object to the particles list.
-            self._particles.append(particle)
-            
-            # Increment the number of particles attribute.
-            self._num_particles += 1
-
-    def skeletonize_particles(self, method = 'zhang'):
-        '''
-        Skeletonize the particles in particles attribute.
-
-        Args:
-            method (str):
-                The method to use for skeletonization. Default is 'lee'. Options are 'lee' and 'zhang'. See the
-                documentation for skimage.morphology.skeletonize for more information.
-        Returns:
-            None
-        '''
-        for particle in self._particles:
-            particle.skeletonize(method = method)
-
-    def classify_particles(self):
-        '''
-        Classify the particles in the particles attribute.
-
-        Args:
-            None
-        Returns:
-            None
-        '''
-        for particle in self._particles:
-            particle.classify()
-
-    def interpolate_particles(self, step_size, k=3, s=0.5):
-        '''
-        Interpolate the particles in the particles attribute. This is necessary for calculating the persistence length with
-        subpixel accuracy. Each path is interpolated using a spline of order k with a smoothing factor s.
-
-        Args:
-            step_size (float):
-                The step size in nanometers along the contour length of the skeleton.
-            k (int):
-                The degree of the spline. Default is 3.
-            s (float):
-                The smoothing factor. Default is 0.5.
-        Returns:
-            None
-        '''
-        self._contour_lengths = []
-        for particle in self._particles:
-            particle.interpolate_skeleton(step_size, k=k, s=s)
-            self._contour_lengths.extend(particle.contour_lengths)
-        self._contour_lengths = np.array(self._contour_lengths)
-
-    def calc_tantan_correlations(self):
-        '''
-        Calculate the persistence length of the polymer particles using the Tan-Tan correlation method.
-
-        Args:
-            None
-        Returns:
-            None
-        '''
-        # Initialize the unnormalized contour length arrays and correlation arrays
-        contour_samplings = []
-        tantan_correlations = []
-
-        # Calculate the Tan-Tan correlation for each particle.
-        for particle in self._particles:
-            particle.calc_tantan_correlation()
-            contour_samplings.extend(particle.contour_samplings)
-            tantan_correlations.extend(particle.tantan_correlations)
-
-        # Find the maximum size of the contour arrays.
-        max_size = max([len(contour) for contour in contour_samplings])
-        # Pad the contour and correlation arrays so each array is the same size.
-        padded_contours = np.array([
-            np.pad(contour, (0, max_size - len(contour)), 'constant', constant_values = np.nan) for contour in contour_samplings])
-        padded_correlations = np.array([
-            np.pad(corr, (0, max_size - len(corr)), 'constant', constant_values = np.nan) for corr in tantan_correlations])
-
-        # Get the contour array containing no nan values. This is the real space lag array.
-        self._contour_sampling = padded_contours[[~np.isnan(lengths).any() for lengths in padded_contours]][0]
-
-        # Calculate the mean correlation for each lag.
-        self._mean_tantan_correlation = np.nanmean(padded_correlations, axis = 0)
-
-        # Calculate the standard deviation for error bars.
-        self._tantan_std = np.nanstd(padded_correlations, axis=0)
-
-        # Calculate the SEM (optional, preferred for error bars).
-        sample_count = np.sum(~np.isnan(padded_correlations), axis=0)
-        self._tantan_sem = self._tantan_std / np.sqrt(sample_count)
-
-    def calc_persistence_length(self, percentile: float = 0.95):
-        '''
-        Calculate the persistence length of the polymer particles using the Tan-Tan correlation method.
-        
-        Args:
-            percentile (float):
-                The percentile of the distribution of polymer branch lengths to fit the exponential decay to. Default is 0.95.
-        Returns:
-            float:
-                The persistence length of the polymer particles.
-        '''
-        # Create the kde for all the contour lengths.
-        kde = gaussian_kde(self._contour_lengths)
-
-        # Calculate the cumulative distribution function of the kde.
-        def cdf(x):
-            return quad(kde, -np.inf, x)[0]
-        
-        # Find the 95th percentile of the distribution.
-        self._percentile_threshold = brentq(lambda x: cdf(x) - percentile, 0, self._contour_lengths.max())
-
-        # Get the contour array containing no nan values.
-        xvals = self._contour_sampling
-        # Filter the xvals array to the 95th percentile.
-        xvals = xvals[xvals < self._percentile_threshold]
-
-        # Filter the mean_correlations array to the same size as xvals.
-        yvals = self._mean_tantan_correlation[:len(xvals)]
-
-        # Fit the exponential decay to the data.
-        popt, pcov = curve_fit(self.__exp_decay, xvals, yvals, p0 = 10)
-
-        # Set the persistence length attribute.
-        self._pl = popt[0]
-        # Set the persistence covariance attribute.
-        self._plcov = pcov[0,0]
-
-        return popt[0] * self._resolution, pcov[0,0] * self._resolution
-
-    def get_filtered_particles(self,
-                               filter_str: str) -> list:
-        '''
-        Returns a list of particles that match a classification string. 
-
-        Args:
-            filter_str (str):
-                The classification string to filter the particles by. Options are 'Linear', 'Branched', 'Loop', and
-                'Unknown'. Note: The classification strings are case sensitive.
-        Returns:
-            list:
-                List of Particle objects that match the classification string.
-        '''
-        return [particle for particle in self._particles if particle.classification == filter_str]
-
-    def plot_image(self, cmap = 'Greys_r'):
-        '''
-        Plot the full field image of the polymer data.
-
-        Args:
-            cmap (str):
-                The colormap to use for the image. Default is 'Greys_r'.
-        Returns:
-            fig, ax:
-                The matplotlib figure and axis objects.
-        '''
-        
-        # Plot the image.
-        fig, ax = plt.subplots(figsize=(8, 8))
-        ax.imshow(self._image, cmap=cmap)
-        ax.set_title('Polymer Image')
-        ax.set_xticks([])
-        ax.set_yticks([])
-        return fig, ax
-    
-    def plot_particle(self, index):
-        '''
-        Plot a single particle in the particles attribute.
-
-        Args:
-            index (int):
-                The index of the particle to plot.
-        Returns:
-            fig, ax:
-                The matplotlib figure and axis objects.
-        '''
-        return self._particles[index].plot_particle()
-
-    def plot_contour_distribution(self):
-        '''
-        Plot the distribution of contour lengths for all particles. Uses Gaussian KDE to return a smooth distribution.
-
-        Args:
-            None
-        Returns:
-            fig, ax:
-                The matplotlib figure and axis objects.
-        '''
-        # Create a distribution of all the polymer branch lengths.
-        xvals = np.linspace(0, self._contour_lengths.max(), 1000)
-        kde = gaussian_kde(self._contour_lengths)
-
-        # Plot the distribution.
-        fig, ax = plt.subplots(figsize=(8, 8))
-        ax.plot(xvals, kde(xvals), color= 'Blue', lw=2)
-
-        # If the percentile threshold is set, plot a vertical line at the threshold.
-        if self._percentile_threshold:
-            ax.axvline(self._percentile_threshold, color='Blue', linestyle='--')
-            # Color underneath the kde for values below the threshold.
-            ax.fill_between(xvals, kde(xvals), where = xvals < self._percentile_threshold, color = 'Blue', alpha = 0.5)
-
-        ax.set_title('Contour Length Distribution')
-        ax.set_xlabel(f'Contour Length (1px = {self._resolution:.2f} nm)')
-        ax.set_ylabel('Density')
-        ax.set_xlim(0, self._contour_lengths.max())
-        ax.set_ylim(0, kde(xvals).max()+0.005)
-
-        # Return the figure and axis objects.
-        return fig, ax
-    
-    def plot_mean_tantan_correlation(self,
-                                     error_bars: bool = False):
-        '''
-        Plot the Tan-Tan correlation for all particles.
-
-        Args:
-            error_bars (bool):
-                Whether or not to plot error bars. Default is False.
-        Returns:
-            fig, ax:
-                The matplotlib figure and axis objects.
-        '''
-        # Plot the Tan-Tan correlation.
-        fig, ax = plt.subplots(figsize=(8, 8))
-
-        # If the threshold is set, plot a vertical line at the threshold. Any points less than the threshold are colored
-        # blue. Any points to the right of the threshold are colored gray.
-        if self._percentile_threshold:
-            ax.axvline(self._percentile_threshold, color='Blue', linestyle='--')
-
-            if error_bars:
-                # Plot data points and error bars for points below the threshold.
-                ax.errorbar(self._contour_sampling[self._contour_sampling < self._percentile_threshold],
-                            self._mean_tantan_correlation[self._contour_sampling < self._percentile_threshold],
-                            yerr=self._tantan_sem[self._contour_sampling < self._percentile_threshold],
-                            fmt='.', color='Blue', label='Fitting Correlation Data')
-
-                # Plot data points and error bars for points above the threshold.
-                ax.errorbar(self._contour_sampling[self._contour_sampling >= self._percentile_threshold],
-                            self._mean_tantan_correlation[self._contour_sampling >= self._percentile_threshold],
-                            yerr=self._tantan_sem[self._contour_sampling >= self._percentile_threshold],
-                            fmt='.', color='Gray', alpha=0.5, label='Excluded Correlation Data')
-            
-            else:
-                # Plot the data points for points below the threshold.
-                ax.plot(self._contour_sampling[self._contour_sampling < self._percentile_threshold],
-                        self._mean_tantan_correlation[self._contour_sampling < self._percentile_threshold],
-                        '.', color='Blue', label = 'Fitting Correlation Data')
-                # Plot the data points for points above the threshold.
-                ax.plot(self._contour_sampling[self._contour_sampling >= self._percentile_threshold],
-                        self._mean_tantan_correlation[self._contour_sampling >= self._percentile_threshold],
-                        '.', color='Gray', alpha = 0.5, label = 'Excluded Correlation Data')
-            
-            # Plot the fitted exponential decay.
-            ax.plot(self._contour_sampling, self.__exp_decay(self._contour_sampling, self._pl),
-                    color='Orange', lw=2, label = f'Exponential Decay Fit (PL = {self._pl*self._resolution:.2f} nm)')
-        else:
-            ax.plot(self._contour_sampling, self._mean_tantan_correlation, '.', label = 'Mean Correlation')      
-        ax.set_title('Mean Tan-Tan Correlation')
-        ax.set_xlabel(f'Contour Length (1px = {self._resolution:.2f} nm)')
-        ax.set_ylabel('Correlation')
-        ax.axhline(0, color='Grey', linestyle=(0, (5, 10)))
-
-        ax.legend()
-
-        return fig, ax
-
-    def print_summary(self):
-        '''
-        Print a summary of the polymer data.
-
-        Args:
-            None
-        Returns:
-            None
-        '''
-
-        print('Polymer Data Summary')
-        print('---------------------')
-        print('Image Stats:')
-        print(f'Interpolated:\t\t\t{self._metadata.get("upscaled", False)}')
-        print(f'Image Size:\t\t\t{self._image.shape}')
-        print(f'Resolution:\t\t\t{self._resolution:.2f} nm/pixel')
-        print('---------------------')
-        print('Particle Stats:')
-        print(f'Number of Particles:\t\t{self._num_particles}')
-        print(f'Linear Particles:\t\t{len(self.get_filtered_particles("Linear"))}')
-        print(f'Branched Particles:\t\t{len(self.get_filtered_particles("Branched"))}')
-        print(f'Branched-Loop Particles:\t{len(self.get_filtered_particles("Branched-Loop"))}')
-        print(f'Looped Particles:\t\t{len(self.get_filtered_particles("Loop"))}')
-        print(f'Unknown Particles:\t\t{len(self.get_filtered_particles("Unknown"))}')
-        print('---------------------')
-        print('Persistence Stats:')
-        print(f'Persistence Length:\t\t{self._pl * self._resolution:.2f} nm')
-        print(f'Persistence Covariance:\t\t{self._plcov * self._resolution:.2f} nm')
-        
-    @property
-    def image(self) -> np.ndarray:
-        '''
-        The full field image of the polymer data.
-        '''
-        return self._image
-    
-    @property
-    def resolution(self) -> float:
-        '''
-        The resolution of the image in nanometers per pixel.
-        '''
-        return self._resolution
-    
-    @property
-    def particles(self) -> list:
-        '''
-        List of Particle objects.
-        '''
-        return self._particles
-    
-    @property
-    def metadata(self) -> Dict[str, Any]:
-        '''
-        The metadata associated with the polymer image. Key-value pairs of metadata.
-        '''
-        return self._metadata
-    
-    @property
-    def num_particles(self) -> int:
-        '''
-        The number of particles in the particles attribute.
-        '''
-        return self._num_particles
-
-    @property
-    def contour_lengths(self) -> list:
-        '''
-        The contour lengths of all paths in all particles.
-        '''
-        return self._contour_lengths
-
-    @property
-    def contour_sampling(self) -> np.ndarray:
-        '''
-        The contour sampling used for all paths in all particles. It ranges from 0 to the maximum contour length in steps of
-        step_size as set in the interpolate_particles method.
-        '''
-        return self._contour_sampling
-
-    @property
-    def mean_tantan_correlation(self) -> np.ndarray:
-        '''
-        The mean Tan-Tan correlation of all particles. Calculated by taking the mean of the Tan-Tan correlation for each
-        path in each particle. 
-        '''
-        return self._mean_tantan_correlation
-
-
-    @property
-    def pl(self) -> float:
-        '''
-        The persistence length of the polymer particles in nanometers.
-        '''
-        return self._pl
-
-    @property
-    def plcov(self) -> float:
-        '''
-        The covariance of the persistence length of the polymer particles in nanometers.
-        '''
-        return self._plcov
-
-    @property
-    def percentile_threshold(self) -> float:
-        '''
-        The threshold of the nth percentile of the contour length distribution. This is used to fit the exponential decay
-        during the calculation of the persistence length. 
-        '''
-        return self._percentile_threshold
-    
-class Polydat_Multi():
-    '''
-    Polymer data class. Used for processing a multiple polymer field images together to increase particle count statistics. 
-    Includes a list of polymer full field images, list of polymer particles, and various methods for analysis.
+    Polymer data class. Used for processing a multiple polymer field images. Includes a list of polymer full field images,
+    list of polymer particles, and various methods for analysis.
 
     Attributes:
         images (list):
-            The full image image of the polymer data.
+            List of full field image arrays of the polymer data.
         resolution (float):
             The resolution of the image in nanometers per pixel.
         particles (list):
@@ -1240,7 +452,7 @@ class Polydat_Multi():
     def from_images(cls,
                     filepaths: list[str],
                     resolution: float,
-                    **metadata: Any) -> 'Polydat_Multi':
+                    **metadata: Any) -> 'Polydat':
         '''
         Create an instance of the Polydat_Multi object from a list of image files.
 
@@ -1470,8 +682,8 @@ class Polydat_Multi():
     ########################
 
     def add_image(self,
-                  filepath,
-                  resolution):
+                  filepath: str,
+                  resolution: float):
         '''
         Load an image file and add it to the images attribute.
 
@@ -1483,16 +695,19 @@ class Polydat_Multi():
         Returns:
             None
         '''
+        # Make sure the resolution of the image matches the resolution of the other images.
         if self._resolution is not None and self._resolution != resolution:
             raise ValueError('Resolution mismatch. All images must have the same resolution.')
         self._resolution = resolution
+
+        # Load the image file and append it to the images attribute.
         with Image.open(filepath) as img:
             grayscale = img.convert('L')
             self._images.append(np.array(grayscale)/255.0)
         
-    def upscale_images(self,
-                       magnification: float,
-                       order = 3):
+    def upscale(self,
+                magnification: float,
+                order = 3):
         '''
         Upscale the full field images by a given magnification factor and interpolation order. The images are interpolated
         using the skimage.transform.resize function.
@@ -1616,7 +831,10 @@ class Polydat_Multi():
         for particle in self._particles:
             particle.classify()
 
-    def interpolate_particles(self, step_size, k=3, s=0.5):
+    def interpolate_particles(self,
+                              step_size: float,
+                              k: int = 3,
+                              s: float = 0.5):
         '''
         Interpolate the particles in the particles attribute. This is necessary for calculating the persistence length with
         subpixel accuracy. Each path is interpolated using a spline of order k with a smoothing factor s.
@@ -1677,7 +895,8 @@ class Polydat_Multi():
         sample_count = np.sum(~np.isnan(padded_correlations), axis=0)
         self._tantan_sem = self._tantan_std / np.sqrt(sample_count)
 
-    def calc_persistence_length(self, percentile: float = 0.95):
+    def calc_persistence_length(self,
+                                percentile: float = 0.95):
         '''
         Calculate the persistence length of the polymer particles using the Tan-Tan correlation method.
         
@@ -1848,10 +1067,11 @@ class Polydat_Multi():
             # Plot the fitted exponential decay.
             ax.plot(self._contour_sampling, self.__exp_decay(self._contour_sampling, self._pl),
                     color='Orange', lw=2, label = f'Exponential Decay Fit (PL = {self._pl*self._resolution:.2f} nm)')
+            
         else:
             ax.plot(self._contour_sampling, self._mean_tantan_correlation, '.', label = 'Mean Correlation')      
         ax.set_title('Mean Tan-Tan Correlation')
-        ax.set_xlabel(f'Contour Length (1px = {self._resolution:.2f} nm)')
+        ax.set_xlabel(f'Contour Length ({self._resolution:.2f} nm)')
         ax.set_ylabel('Correlation')
         ax.axhline(0, color='Grey', linestyle=(0, (5, 10)))
 
