@@ -740,47 +740,6 @@ class Polydat():
         sample_count = np.sum(~np.isnan(padded_correlations), axis=0)
         self._tantan_sem = self._tantan_std / np.sqrt(sample_count)
 
-    # The following is an older version of the persistence length calculation method. It is kept for reference. 
-    # def calc_persistence_length(self,
-    #                             percentile: float = 0.95):
-    #     '''
-    #     Calculate the persistence length of the polymer particles using the Tan-Tan correlation method.
-        
-    #     Args:
-    #         percentile (float):
-    #             The percentile of the distribution of polymer branch lengths to fit the exponential decay to. Default is 0.95.
-    #     Returns:
-    #         float:
-    #             The persistence length of the polymer particles.
-    #     '''
-    #     # Create the kde for all the contour lengths.
-    #     kde = gaussian_kde(self._contour_lengths)
-
-    #     # Calculate the cumulative distribution function of the kde.
-    #     def cdf(x):
-    #         return quad(kde, -np.inf, x)[0]
-        
-    #     # Find the 95th percentile of the distribution.
-    #     self._percentile_threshold = brentq(lambda x: cdf(x) - percentile, 0, self._contour_lengths.max())
-
-    #     # Get the contour array containing no nan values.
-    #     xvals = self._contour_sampling
-    #     # Filter the xvals array to the 95th percentile.
-    #     xvals = xvals[xvals < self._percentile_threshold]
-
-    #     # Filter the mean_correlations array to the same size as xvals.
-    #     yvals = self._mean_tantan_correlation[:len(xvals)]
-
-    #     # Fit the exponential decay to the data.
-    #     popt, pcov = curve_fit(self.__exp_decay, xvals, yvals, p0 = 10)
-
-    #     # Set the persistence length attribute.
-    #     self._pl = popt[0]
-    #     # Set the persistence covariance attribute.
-    #     self._plcov = pcov[0,0]
-
-    #     return popt[0] * self._resolution, pcov[0,0] * self._resolution
-
     def calc_persistence_length(self,
                                 min_contour_length: float = 0,
                                 max_contour_length: float = np.inf):
@@ -819,9 +778,9 @@ class Polydat():
         # Set the persistence length attribute.
         self._pl = popt[0]
         # Set the persistence covariance attribute.
-        self._plcov = pcov[0,0]
+        self._plcov = pcov
 
-        return popt[0] * self._resolution, pcov[0,0] * self._resolution
+        return popt[0] * self._resolution, pcov
 
     def get_filtered_particles(self,
                                filter_str: str) -> list:
@@ -1047,7 +1006,7 @@ class Polydat():
         print('---------------------')
         print('Persistence Stats:')
         print(f'Persistence Length:\t\t{self._pl * self._resolution:.1f} nm')
-        print(f'Persistence Covariance:\t\t{self._plcov * self._resolution:.1f} nm')
+        print(f'Persistence Error:\t\t{np.sqrt(np.diag(self._plcov))[0] * self._resolution:.1f} nm')
         
     @property
     def images(self) -> list[np.ndarray]:
