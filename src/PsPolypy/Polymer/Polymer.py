@@ -1,12 +1,6 @@
-import hashlib
-import lzma
-import pickle
-
 from PIL import Image
 import numpy as np
 from typing import Any, Tuple, Dict
-
-import pandas as pd
 
 from scipy.interpolate import splprep, splev
 from scipy.stats import gaussian_kde
@@ -84,6 +78,7 @@ class Particle():
         # Set the classification attribute.
         self._classification = classification
 
+        # Set the particle id attribute.
         self._particle_id = particle_id
 
         # Set the contour sampling attribute.
@@ -101,10 +96,10 @@ class Particle():
         # Set the Tan-Tan correlation attribute.
         self._tantan_correlations = None
 
-    def skeletonize(self,
-                    method: str = 'zhang') -> None:
+    def skeletonize_particle(self,
+                             method: str = 'zhang') -> None:
         '''
-        Skeletonize the particle image and set the skeleton attribute.
+        Skeletonize the particle's binary mask and set the skeleton attribute.
 
         Args:
             method (str):
@@ -145,7 +140,7 @@ class Particle():
             
             # If any loops are found, classify the particle as branched-loop.
             if len(loops) > 0:
-                self._classification = 'Branched-Loop'
+                self._classification = 'Branched-Looped'
             else:
                 self._classification = 'Branched'
 
@@ -193,17 +188,17 @@ class Particle():
 
             # Calculate the contour length of the current skeleton path.
             contour_length = self._skeleton.path_lengths()[path_idx]
-
-            # Interploation only works properly for paths lwith more than 3 points. This is due to spline interpolation only
-            # functioning with more points than the degree of the spline. Skipping paths with less than 3 points.
-            if contour_length < 3:
-                continue
             
+            # This interpolation only works properly for paths with that satisfy the m > k condition in the splprep 
+            # function. We attempt to interpolate the path, and if it fails, we skip the path. 
+            try:
+                # Interpolate the current skeleton path.
+                tck, _ = splprep(skeleton_coordinates.T, k=k, s=s)
+            except TypeError:
+                continue
+
             # Append the contour length for this path.
             self._contour_lengths.append(contour_length)
-
-            # Interpolate the current skeleton path.
-            tck, _ = splprep(skeleton_coordinates.T, k=k, s=s)
 
             # Set the actual contour coordinates for this path.
             contour_actual = np.arange(0, contour_length, step_size)
@@ -262,9 +257,31 @@ class Particle():
             # Append the correlation for this path to the list.
             self._tantan_correlations.append(corr)
 
-    def plot_particle(self):
+    def plot_particle(self, cmap = 'Greys_r'):
         '''
-        Plot the particle image, skeleton, and interpolated skeleton.
+        Plot the particle image.
+
+        Args:
+            None
+        Returns:
+            fig, ax:
+                The matplotlib figure and axis objects.
+        '''
+        # Create the fig and ax.
+        fig, ax = plt.subplots(figsize=(4, 4))
+        # Set the title
+        if self._classification is None:
+            ax.set_title(f'Particle {self._particle_id}')
+        else:
+            ax.set_title(f'Particle {self._particle_id} - {self._classification}')
+        # Plot the image.
+        ax.imshow(self._image, cmap = cmap)
+        # Return the fig and ax.
+        return fig, ax
+    
+    def plot_skeleton(self, cmap = 'Greys_r'):
+        '''
+        Plot the particle skeleton and interpolated skeleton.
         
         Args:
             None
@@ -272,24 +289,31 @@ class Particle():
             fig, ax:
                 The matplotlib figure and axis objects.
         '''
+        # Create the fig and ax.
+        fig, ax = plt.subplots(figsize=(4, 4))
+        # Set the title
+        if self._classification is None:
+            ax.set_title(f'Particle {self._particle_id} Skeleton')
+        else:
+            ax.set_title(f'Particle {self._particle_id} Skeleton - {self._classification}')
 
-        fig, ax = plt.subplots(figsize=(8, 8))
-
-        ax.set_title(f'Particle {self._particle_id} - {self._classification}')
-
-        # Plot the particle image.
-        ax.imshow(self.skeleton.skeleton_image, cmap = 'Greys_r', alpha = 0.75)
-        ax.set_xticks([])
-        ax.set_yticks([])
-
-        # ax.imshow(self._image, cmap='viridis', alpha = 0.5)
+        if self._skeleton is not None:
+            # Plot the skeleton
+            ax.imshow(self.skeleton.skeleton_image, cmap = cmap, alpha = 0.75)
+        else:
+            raise ValueError('Skeleton attribute is not set. Skeletonize the particle before plotting.')
         
-        # Plot the interpolated skeletons. This only works if the interpolated skeleton coordinates are set, and if the
-        # particle has more than 3 points in the skeleton.
-        if len(self._interp_skeleton_coordinates) > 0:
+        # Plot the interpolated skeletons. This only works if the interpolated skeleton coordinates are set.
+        if self._interp_skeleton_coordinates is not None:
             for index, (splinex, spliney) in enumerate(self._interp_skeleton_coordinates):
                 ax.plot(spliney, splinex, lw=1, label = f'Path {index}')
             ax.legend()
+        # if len(self._interp_skeleton_coordinates) > 0:
+        #     for index, (splinex, spliney) in enumerate(self._interp_skeleton_coordinates):
+        #         ax.plot(spliney, splinex, lw=1, label = f'Path {index}')
+        #     ax.legend()
+        
+        # Return the fig and ax.
         return fig, ax
     
     @property
@@ -342,44 +366,44 @@ class Particle():
         return self._skeleton
     
     @property
-    def skeleton_summary(self) -> pd.DataFrame:
+    def skeleton_summary(self) -> 'pandas.DataFrame': # type: ignore
         '''
         The skan skeleton summary of the particle.
         '''
         return self._skeleton_summary
     
     @property
-    def contour_samplings(self) -> list:
+    def contour_samplings(self) -> list[np.ndarray]:
         '''
         The contour sampling of each path in the particle.
         '''
         return self._contour_samplings
     
     @property
-    def contour_lengths(self) -> list:
+    def contour_lengths(self) -> list[float]:
         '''
         The contour lengths of each path in the particle.
         '''
         return self._contour_lengths
     
     @property
-    def interp_skeleton_coordinates(self) -> np.ndarray:
+    def interp_skeleton_coordinates(self) -> list[np.ndarray]:
         '''
         The interpolated skeleton coordinates of each path in the particle.
         '''
         return self._interp_skeleton_coordinates
     
     @property
-    def interp_skeleton_derivatives(self) -> np.ndarray:
+    def interp_skeleton_derivatives(self) -> list[np.ndarray]:
         '''
         The interpolated derivative of the skeleton of each path in the particle.
         '''
         return self._interp_skeleton_derivatives
     
     @property
-    def tantan_correlations(self) -> np.ndarray:
+    def tantan_correlations(self) -> list[np.ndarray]:
         '''
-        The Tan-Tan correlation of the particle.
+        The Tan-Tan correlation of each path in the particle.
         '''
         return self._tantan_correlations
    
@@ -399,7 +423,7 @@ class Polydat():
             The metadata ssociated with the polymer image. Key-value pairs of metadata.
     '''
     def __init__(self,
-                 images: list[np.ndarray] = [],
+                 images: list[np.ndarray] = None,
                  resolution: float = None,
                  **metadata: Any):
         '''
@@ -416,7 +440,7 @@ class Polydat():
             None
         '''
         #Set the image attribute.
-        self._images = images
+        self._images = images if images is not None else []
 
         # Set the resolution attribute.
         self._resolution = resolution
@@ -439,8 +463,11 @@ class Polydat():
         # Set the mean Tan-Tan correlation attribute.
         self._mean_tantan_correlation = None
 
-        # Set the percentile threshold attribute.
-        self._percentile_threshold = None
+        # Set the minimum contour length attribute.
+        self._min_contour_length = 0
+
+        # Set the maximum contour length attribute.
+        self._max_contour_length = np.inf
 
         # Set the persistence length attribute.
         self._pl = 0
@@ -493,189 +520,6 @@ class Polydat():
                 The exponential decay value.
         '''
         return np.exp(-x/(2*Lp))
-
-    #############################
-    ##### Save/Load Methods #####
-    #############################
-
-    @staticmethod
-    def _hash_file(filepath: str) -> str:
-        '''
-        Calculates the sha256 hash of a file.
-
-        Args:
-            filepath (str):
-                The path to the file to hash.
-        Returns:
-            str:
-                The sha256 hash of the file.
-        '''
-        # Initialize the hash object.
-        sha256 = hashlib.sha256()
-        with open(filepath, 'rb') as file:
-            # Read the file in chunks and update the hash object.
-            for chunk in iter(lambda: file.read(4096), b''):
-                sha256.update(chunk)
-        # Return the hexdigest of the hash object.
-        return sha256.hexdigest()
-    
-    def save_pickle(self,
-                    filepath: str,
-                    hash: bool = True) -> None:
-        '''
-        Saves the Polydat object to a pickle file.
-
-        Args:
-            filepath (str):
-                The path to save the pickle file.
-            hash (bool):
-                Whether or not to save the sha256 hash of the file. Default is True.
-        Returns:
-            None
-        '''
-        # Save the pickle file.
-        with open(filepath, 'wb') as file:
-            pickle.dump(self, file)
-        
-        # Save the hash of the file.
-        if hash:
-            hash_str = self._hash_file(filepath)
-            with open(f'{filepath}.sha256', 'w') as file:
-                file.write(hash_str)
-        else:
-            # Warn the user that hashing is disabled.
-            ### Todo, implement logging.
-            pass
-
-    @classmethod
-    def load_pickle(cls,
-                    filepath: str,
-                    verify_hash: bool = True) -> 'Polydat':
-        '''
-        Loads a Polydat object from a pickle file. If verify_hash is True, the sha256 hash of the file will be checked 
-        against the hash file with the same name as the pickle file and the extension .sha256. If the hashes do not match,
-        a ValueError will be raised. If verify_hash is False, the hash will not be checked. Pickles are not
-        robust against eroneous or maliciously constructed data. It is recommended that you never unpack data recieved
-        from untrusted or unauthenticated sources. See https://docs.python.org/3/library/pickle.html.
-
-        Args:
-            filepath (str):
-                The path to the pickle file.
-            verify_hash (bool):
-                Whether or not to verify the hash of the file. Default is True.
-        Returns:
-            SimAFM_Stack:
-                The loaded Polydat object.
-        '''
-        # Verify the hash of the file
-        if verify_hash:
-            hash_str = cls._hash_file(filepath)
-
-            # Try to open the hash file. If it does not exist, raise a FileNotFoundError.
-            try:
-                with open(f'{filepath}.sha256', 'r') as file:
-                    file_hash = file.read()
-            except FileNotFoundError:
-                # Todo, implement logging.
-                raise FileNotFoundError(f'Hash file not found. Cannot verify the integrity of the pickle file. Verify the integrity of the file manually or disable hash verification.')
-            
-            # Check if the hash of the file matches the hash in the hash file. If not, raise a ValueError.
-            if hash_str != file_hash:
-                # Todo, implement logging.
-                raise ValueError(f'Hash mismatch. Cannot verify the integrity of the pickle file. Verify the integrity of the file manually or disable hash verification.')
-            
-            # Load the pickle file.
-            with open(filepath, 'rb') as file:
-                obj = pickle.load(file)
-
-        else:
-            # Warn the user that hash verification is disabled.
-            # Todo, implement logging.
-            
-            # Load the pickle file.
-            with open(filepath, 'rb') as file:
-                obj = pickle.load(file)
-
-        return obj
-    
-    def save_lzma(self,
-                  filepath: str,
-                  hash: bool = True) -> None:
-        '''
-        Saves the SimAFM_Stack object to a lzma compressed pickle file.
-
-        Args:
-            filepath (str):
-                The path to save the lzma compressed pickle file.
-            hash (bool):
-                Whether or not to save the sha256 hash of the file. Default is True.
-        Returns:
-            None       
-        '''
-        # Save the lzma compressed pickle file.
-        with lzma.open(filepath, 'wb') as file:
-            pickle.dump(self, file)
-        
-        # Save the hash of the file.
-        if hash:
-            hash_str = self._hash_file(filepath)
-            with open(f'{filepath}.sha256', 'w') as file:
-                file.write(hash_str)
-        else:
-            # Warn the user that hashing is disabled.
-            # Todo, implement logging.
-            pass
-    
-    @classmethod
-    def load_lzma(cls,
-                  filepath: str,
-                  verify_hash: bool = True) -> 'Polydat':
-        '''
-        Loads a Polydat object from a lzma compressed pickle file. If verify_hash is True, the sha256 hash of the file will be checked 
-        against the hash file with the same name as the lzma file and the extension .sha256. If the hashes do not match,
-        a ValueError will be raised. If verify_hash is False, the hash will not be checked. Pickle objects are not
-        robust against eroneous or maliciously constructed data. It is recommended that you never unpack data recieved
-        from untrusted or unauthenticated sources. See https://docs.python.org/3/library/pickle.html.
-
-        Args:
-            filepath (str):
-                The path to the lzma compressed pickle file.
-            verify_hash (bool):
-                Whether or not to verify the hash of the file. Default is True.
-        Returns:
-            SimAFM_Stack:
-                The loaded SimAFM_Stack object.
-        '''
-        # Verify the hash of the file
-        if verify_hash:
-            hash_str = cls._hash_file(filepath)
-
-            # Try to open the hash file. If it does not exist, raise a FileNotFoundError.
-            try:
-                with open(f'{filepath}.sha256', 'r') as file:
-                    file_hash = file.read()
-            except FileNotFoundError:
-                # Todo, implement logging.
-                raise FileNotFoundError(f'Hash file not found. Cannot verify the integrity of the lzma file. Verify the integrity of the file manually or disable hash verification.')
-            
-            # Check if the hash of the file matches the hash in the hash file. If not, raise a ValueError.
-            if hash_str != file_hash:
-                # Todo, implement logging.
-                raise ValueError(f'Hash mismatch. Cannot verify the integrity of the lzma file. Verify the integrity of the file manually or disable hash verification.')
-            
-            # Load the lzma file.
-            with lzma.open(filepath, 'rb') as file:
-                obj = pickle.load(file)
-        
-        else:
-            # Warn the user that hash verification is disabled.
-            # Todo, implement logging.
-            
-            # Load the lzma file.
-            with lzma.open(filepath, 'rb') as file:
-                obj = pickle.load(file)
-
-        return obj
     
     ########################
     ##### Main Methods #####
@@ -817,7 +661,7 @@ class Polydat():
             None
         '''
         for particle in self._particles:
-            particle.skeletonize(method = method)
+            particle.skeletonize_particle(method = method)
 
     def classify_particles(self):
         '''
@@ -831,13 +675,14 @@ class Polydat():
         for particle in self._particles:
             particle.classify()
 
-    def interpolate_particles(self,
+    def interpolate_skeletons(self,
                               step_size: float,
                               k: int = 3,
                               s: float = 0.5):
         '''
-        Interpolate the particles in the particles attribute. This is necessary for calculating the persistence length with
-        subpixel accuracy. Each path is interpolated using a spline of order k with a smoothing factor s.
+        Interpolate the particle skeleton for each particle in the particles attribute. This is necessary for calculating
+        the persistence length with subpixel accuracy. Each path is interpolated using a spline of order k with a smoothing
+        factor s.
 
         Args:
             step_size (float):
@@ -886,7 +731,7 @@ class Polydat():
         self._contour_sampling = padded_contours[[~np.isnan(lengths).any() for lengths in padded_contours]][0]
 
         # Calculate the mean correlation for each lag.
-        self._mean_tantan_correlation = np.nanmean(padded_correlations, axis = 0)
+        self._mean_tantan_correlation = np.abs(np.nanmean(padded_correlations, axis = 0))
 
         # Calculate the standard deviation for error bars.
         self._tantan_std = np.nanstd(padded_correlations, axis=0)
@@ -895,35 +740,78 @@ class Polydat():
         sample_count = np.sum(~np.isnan(padded_correlations), axis=0)
         self._tantan_sem = self._tantan_std / np.sqrt(sample_count)
 
+    # The following is an older version of the persistence length calculation method. It is kept for reference. 
+    # def calc_persistence_length(self,
+    #                             percentile: float = 0.95):
+    #     '''
+    #     Calculate the persistence length of the polymer particles using the Tan-Tan correlation method.
+        
+    #     Args:
+    #         percentile (float):
+    #             The percentile of the distribution of polymer branch lengths to fit the exponential decay to. Default is 0.95.
+    #     Returns:
+    #         float:
+    #             The persistence length of the polymer particles.
+    #     '''
+    #     # Create the kde for all the contour lengths.
+    #     kde = gaussian_kde(self._contour_lengths)
+
+    #     # Calculate the cumulative distribution function of the kde.
+    #     def cdf(x):
+    #         return quad(kde, -np.inf, x)[0]
+        
+    #     # Find the 95th percentile of the distribution.
+    #     self._percentile_threshold = brentq(lambda x: cdf(x) - percentile, 0, self._contour_lengths.max())
+
+    #     # Get the contour array containing no nan values.
+    #     xvals = self._contour_sampling
+    #     # Filter the xvals array to the 95th percentile.
+    #     xvals = xvals[xvals < self._percentile_threshold]
+
+    #     # Filter the mean_correlations array to the same size as xvals.
+    #     yvals = self._mean_tantan_correlation[:len(xvals)]
+
+    #     # Fit the exponential decay to the data.
+    #     popt, pcov = curve_fit(self.__exp_decay, xvals, yvals, p0 = 10)
+
+    #     # Set the persistence length attribute.
+    #     self._pl = popt[0]
+    #     # Set the persistence covariance attribute.
+    #     self._plcov = pcov[0,0]
+
+    #     return popt[0] * self._resolution, pcov[0,0] * self._resolution
+
     def calc_persistence_length(self,
-                                percentile: float = 0.95):
+                                min_contour_length: float = 0,
+                                max_contour_length: float = np.inf):
         '''
-        Calculate the persistence length of the polymer particles using the Tan-Tan correlation method.
+        Calculate the persistence length of the polymer particles using the Tan-Tan correlation method. The correlation will
+        only be fit between the minimum and maximum contour lengths.
         
         Args:
-            percentile (float):
-                The percentile of the distribution of polymer branch lengths to fit the exponential decay to. Default is 0.95.
+            min_contour_length (float):
+                The minimum contour length to fit the exponential decay to. Default is 0.
+            max_contour_length (float):
+                The maximum contour length to fit the exponential decay to. Default is np.inf.
         Returns:
             float:
                 The persistence length of the polymer particles.
-        '''
-        # Create the kde for all the contour lengths.
-        kde = gaussian_kde(self._contour_lengths)
-
-        # Calculate the cumulative distribution function of the kde.
-        def cdf(x):
-            return quad(kde, -np.inf, x)[0]
-        
-        # Find the 95th percentile of the distribution.
-        self._percentile_threshold = brentq(lambda x: cdf(x) - percentile, 0, self._contour_lengths.max())
-
+        '''        
         # Get the contour array containing no nan values.
         xvals = self._contour_sampling
-        # Filter the xvals array to the 95th percentile.
-        xvals = xvals[xvals < self._percentile_threshold]
+
+        # Get the mask for the xvalues between the minimum and maximum contour lengths.
+        inbetween_mask = (xvals >= min_contour_length) * (xvals <= max_contour_length)
+
+        # Set the minimum and maximum contour lengths attributes for usage in the plotting methods.
+        self._min_contour_length = min_contour_length
+        self._max_contour_length = max_contour_length
+
+        # Filter the xvals array to between the minimum and maximum contour lengths.
+        xvals = xvals[inbetween_mask]
 
         # Filter the mean_correlations array to the same size as xvals.
-        yvals = self._mean_tantan_correlation[:len(xvals)]
+        yvals = self._mean_tantan_correlation[inbetween_mask]
 
         # Fit the exponential decay to the data.
         popt, pcov = curve_fit(self.__exp_decay, xvals, yvals, p0 = 10)
@@ -967,11 +855,9 @@ class Polydat():
         '''
         
         # Plot the image.
-        fig, ax = plt.subplots(figsize=(8, 8))
+        fig, ax = plt.subplots(figsize=(5, 5))
         ax.imshow(self._images[index], cmap=cmap)
-        ax.set_title('Polymer Image')
-        ax.set_xticks([])
-        ax.set_yticks([])
+        ax.set_title(f'Polymer Field {index}')
         return fig, ax
     
     def plot_particle(self,
@@ -987,8 +873,23 @@ class Polydat():
                 The matplotlib figure and axis objects.
         '''
         return self._particles[index].plot_particle()
+    
+    def plot_skeleton(self,
+                      index: int = 0):
+        '''
+        Plot the skeleton of a single particle in the particles attribute.
 
-    def plot_contour_distribution(self):
+        Args:
+            index (int):
+                The index of the particle to plot.
+        Returns:
+            fig, ax:
+                The matplotlib figure and axis objects.
+        '''
+        return self._particles[index].plot_skeleton()
+
+    def plot_contour_distribution(self,
+                                  **kwargs):
         '''
         Plot the distribution of contour lengths for all particles. Uses Gaussian KDE to return a smooth distribution.
 
@@ -998,31 +899,61 @@ class Polydat():
             fig, ax:
                 The matplotlib figure and axis objects.
         '''
+
+        # Handle Keyword Arguments for plotting.
+        figsize = kwargs.pop('figsize', (5, 5))
+        dist_color = kwargs.pop('dist_color', 'Blue')
+        fill_color = kwargs.pop('fill_color', 'LightBlue')
+        lw = kwargs.pop('lw', 2)
+
+        # If any keyword arguments are left, they aren't handled. Raise a ValueError.
+        if kwargs:
+            raise ValueError(f'Invalid keyword arguments: {kwargs.keys()}')
+
         # Create a distribution of all the polymer branch lengths.
         xvals = np.linspace(0, self._contour_lengths.max(), 1000)
         kde = gaussian_kde(self._contour_lengths)
 
         # Plot the distribution.
-        fig, ax = plt.subplots(figsize=(8, 8))
-        ax.plot(xvals, kde(xvals), color= 'Blue', lw=2)
+        fig, ax = plt.subplots(figsize = figsize)
 
-        # If the percentile threshold is set, plot a vertical line at the threshold.
-        if self._percentile_threshold:
-            ax.axvline(self._percentile_threshold, color='Blue', linestyle='--')
-            # Color underneath the kde for values below the threshold.
-            ax.fill_between(xvals, kde(xvals), where = xvals < self._percentile_threshold, color = 'Blue', alpha = 0.5)
+        if self._min_contour_length != 0 or self._max_contour_length != np.inf:
 
+            inbetween_mask = (xvals >= self._min_contour_length) * (xvals <= self._max_contour_length)
+            less_mask = xvals <= self._min_contour_length
+            greater_mask = xvals >= self._max_contour_length
+
+            # Plot the distribution between the minimum and maximum contour lengths.
+            ax.plot(xvals[inbetween_mask], kde(xvals[inbetween_mask]), color = dist_color, lw = lw, label = 'Fitting Distribution')
+            # Fill the distribution between the minimum and maximum contour lengths.
+            ax.fill_between(xvals[inbetween_mask], kde(xvals[inbetween_mask]), color = fill_color)
+            # Plot the distribution outside the minimum and maximum contour lengths.
+            ax.plot(xvals[less_mask], kde(xvals[less_mask]), color = 'Gray', alpha = 0.5, label = 'Excluded Distribution')
+            ax.plot(xvals[greater_mask], kde(xvals[greater_mask]), color = 'Gray', alpha = 0.5)
+
+            # Draw the vertical lines for the minimum and maximum contour lengths.
+            ax.axvline(self._min_contour_length, color = dist_color, linestyle = '--')
+            ax.axvline(self._max_contour_length, color = dist_color, linestyle = '--')
+
+        else:
+            # Plot the distribution.
+            ax.plot(xvals, kde(xvals), color = dist_color, lw = lw, label = 'Contour Length Distribution')
+            # Fill the distribution.
+            ax.fill_between(xvals, kde(xvals), color = fill_color)
+
+        # Set the title, xlabel, and ylabel.
         ax.set_title('Contour Length Distribution')
-        ax.set_xlabel(f'Contour Length (1px = {self._resolution:.2f} nm)')
+        ax.set_xlabel(f'Contour Length ({self._resolution:.1f} nm)')
         ax.set_ylabel('Density')
-        ax.set_xlim(0, self._contour_lengths.max())
-        ax.set_ylim(0, kde(xvals).max()+0.005)
+        # Add a legend.
+        ax.legend()
 
         # Return the figure and axis objects.
         return fig, ax
     
     def plot_mean_tantan_correlation(self,
-                                     error_bars: bool = False):
+                                     error_bars: bool = False,
+                                     **kwargs):
         '''
         Plot the Tan-Tan correlation for all particles.
 
@@ -1033,47 +964,57 @@ class Polydat():
             fig, ax:
                 The matplotlib figure and axis objects.
         '''
+        # If error bars are set, plot the mean Tan-Tan correlation with error bars. Otherwise, plot the mean Tan-Tan
+        # correlation without error bars.
+        if error_bars:
+            error = self._tantan_sem
+        else:
+            error = np.zeros_like(self._mean_tantan_correlation)
+
+        # Handle Keyword Arguments for plotting.
+        figsize = kwargs.pop('figsize', (8, 8))
+        lw = kwargs.pop('lw', 2)
+        corr_color = kwargs.pop('corr_color', 'Blue')
+        error_color = kwargs.pop('error_color', 'LightBlue')
+        fit_color = kwargs.pop('fit_color', 'Orange')
+
+        # If any keyword arguments are left, they aren't handled. Raise a ValueError.
+        if kwargs:
+            raise ValueError(f'Invalid keyword arguments: {kwargs.keys()}')
+        
         # Plot the Tan-Tan correlation.
-        fig, ax = plt.subplots(figsize=(8, 8))
+        fig, ax = plt.subplots(figsize=figsize)
 
-        # If the threshold is set, plot a vertical line at the threshold. Any points less than the threshold are colored
-        # blue. Any points to the right of the threshold are colored gray.
-        if self._percentile_threshold:
-            ax.axvline(self._percentile_threshold, color='Blue', linestyle='--')
 
-            if error_bars:
-                # Plot data points and error bars for points below the threshold.
-                ax.errorbar(self._contour_sampling[self._contour_sampling < self._percentile_threshold],
-                            self._mean_tantan_correlation[self._contour_sampling < self._percentile_threshold],
-                            yerr=self._tantan_sem[self._contour_sampling < self._percentile_threshold],
-                            fmt='.', color='Blue', label='Fitting Correlation Data')
-
-                # Plot data points and error bars for points above the threshold.
-                ax.errorbar(self._contour_sampling[self._contour_sampling >= self._percentile_threshold],
-                            self._mean_tantan_correlation[self._contour_sampling >= self._percentile_threshold],
-                            yerr=self._tantan_sem[self._contour_sampling >= self._percentile_threshold],
-                            fmt='.', color='Gray', alpha=0.5, label='Excluded Correlation Data')
+        # If the minimum and maximum contour lengths are set, plot a vertical line at the minimum and maximum contour
+        # lengths.
+        if self._min_contour_length != 0 or self._max_contour_length != np.inf:
             
-            else:
-                # Plot the data points for points below the threshold.
-                ax.plot(self._contour_sampling[self._contour_sampling < self._percentile_threshold],
-                        self._mean_tantan_correlation[self._contour_sampling < self._percentile_threshold],
-                        '.', color='Blue', label = 'Fitting Correlation Data')
-                # Plot the data points for points above the threshold.
-                ax.plot(self._contour_sampling[self._contour_sampling >= self._percentile_threshold],
-                        self._mean_tantan_correlation[self._contour_sampling >= self._percentile_threshold],
-                        '.', color='Gray', alpha = 0.5, label = 'Excluded Correlation Data')
+            inbetween_mask = (self._contour_sampling >= self._min_contour_length) * (self._contour_sampling <= self._max_contour_length)
+
+            # Plot the mean Tan-Tan correlation with error bars.
+            ax.errorbar(self._contour_sampling[inbetween_mask], self._mean_tantan_correlation[inbetween_mask],
+                        yerr = error[inbetween_mask], fmt = '.', color = corr_color, label = 'Fitting Abs Mean Correlation', ecolor = error_color)
+            ax.errorbar(self._contour_sampling[~inbetween_mask], self._mean_tantan_correlation[~inbetween_mask],
+                        yerr = error[~inbetween_mask], fmt = '.', color = 'Gray', alpha = 0.5, label = 'Excluded Abs Mean Correlation', ecolor = 'LightGray')
             
+            # Draw the verical lines for the minimum and maximum contour lengths.
+            ax.axvline(self._min_contour_length, color = corr_color, linestyle = '--')
+            ax.axvline(self._max_contour_length, color = corr_color, linestyle = '--')
+        else:
+            # Plot the mean Tan-Tan correlation with error bars.
+            ax.errorbar(self._contour_sampling, self._mean_tantan_correlation,
+                        yerr = error, fmt = '.', color = corr_color, label = 'Abs Mean Correlation', ecolor = error_color)
+
+        if self._pl != 0:
             # Plot the fitted exponential decay.
             ax.plot(self._contour_sampling, self.__exp_decay(self._contour_sampling, self._pl),
-                    color='Orange', lw=2, label = f'Exponential Decay Fit (PL = {self._pl*self._resolution:.2f} nm)')
-            
-        else:
-            ax.plot(self._contour_sampling, self._mean_tantan_correlation, '.', label = 'Mean Correlation')      
+                    color=fit_color, lw=lw, label = f'Exponential Decay Fit (PL = {self._pl*self._resolution:.1f} nm)')
+          
         ax.set_title('Mean Tan-Tan Correlation')
-        ax.set_xlabel(f'Contour Length ({self._resolution:.2f} nm)')
+        ax.set_xlabel(f'Contour Length ({self._resolution:.1f} nm)')
         ax.set_ylabel('Correlation')
-        ax.axhline(0, color='Grey', linestyle=(0, (5, 10)))
+        ax.set_ylim([0,1.05])
 
         ax.legend()
 
@@ -1094,19 +1035,19 @@ class Polydat():
         print('Image Stats:')
         print(f'Number of Images:\t\t{len(self._images)}')
         print(f'Interpolated:\t\t\t{self._metadata.get("upscaled", False)}')
-        print(f'Resolution:\t\t\t{self._resolution:.2f} nm/pixel')
+        print(f'Resolution:\t\t\t{self._resolution:.1f} nm/pixel')
         print('---------------------')
         print('Particle Stats:')
         print(f'Number of Particles:\t\t{self._num_particles}')
         print(f'Linear Particles:\t\t{len(self.get_filtered_particles("Linear"))}')
         print(f'Branched Particles:\t\t{len(self.get_filtered_particles("Branched"))}')
-        print(f'Branched-Loop Particles:\t{len(self.get_filtered_particles("Branched-Loop"))}')
+        print(f'Branched-Looped Particles:\t{len(self.get_filtered_particles("Branched-Looped"))}')
         print(f'Looped Particles:\t\t{len(self.get_filtered_particles("Loop"))}')
         print(f'Unknown Particles:\t\t{len(self.get_filtered_particles("Unknown"))}')
         print('---------------------')
         print('Persistence Stats:')
-        print(f'Persistence Length:\t\t{self._pl * self._resolution:.2f} nm')
-        print(f'Persistence Covariance:\t\t{self._plcov * self._resolution:.2f} nm')
+        print(f'Persistence Length:\t\t{self._pl * self._resolution:.1f} nm')
+        print(f'Persistence Covariance:\t\t{self._plcov * self._resolution:.1f} nm')
         
     @property
     def images(self) -> list[np.ndarray]:
@@ -1123,7 +1064,7 @@ class Polydat():
         return self._resolution
     
     @property
-    def particles(self) -> list:
+    def particles(self) -> list[Particle]:
         '''
         List of Particle objects.
         '''

@@ -1,6 +1,10 @@
-tests/
-__pycache__/
+# Ignore Python build files
 *.egg-info
-.pyc
-.ipynb_checkpoints/
 build/
+
+# Ignore Jupyter Notebook checkpoints
+**/.ipynb_checkpoints/
+
+# Ignore other temporary Jupyter Notebook files
+**/*.pyc
+**/__pycache__/
