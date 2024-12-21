@@ -306,7 +306,7 @@ class Particle():
         # Plot the interpolated skeletons. This only works if the interpolated skeleton coordinates are set.
         if self._interp_skeleton_coordinates is not None:
             for index, (splinex, spliney) in enumerate(self._interp_skeleton_coordinates):
-                ax.plot(spliney, splinex, lw=1, label = f'Path {index}')
+                ax.plot(spliney, splinex, lw=4, color='red', label = f'Path {index}')
             ax.legend()
         # if len(self._interp_skeleton_coordinates) > 0:
         #     for index, (splinex, spliney) in enumerate(self._interp_skeleton_coordinates):
@@ -1004,9 +1004,9 @@ class Polydat():
         print(f'Looped Particles:\t\t{len(self.get_filtered_particles("Loop"))}')
         print(f'Unknown Particles:\t\t{len(self.get_filtered_particles("Unknown"))}')
         print('---------------------')
-        print('Persistence Stats:')
-        print(f'Persistence Length:\t\t{self._pl * self._resolution:.1f} nm')
-        print(f'Persistence Error:\t\t{np.sqrt(np.diag(self._plcov))[0] * self._resolution:.1f} nm')
+        print('Persistence Length Stats:')
+        print(f'  Mean Persistence Length:\t{self._pl * self._resolution:.1f} nm')
+        print(f'  Standard Deviation:\t\t{np.sqrt(np.diag(self._plcov))[0] * self._resolution:.1f} nm')
         
     @property
     def images(self) -> list[np.ndarray]:

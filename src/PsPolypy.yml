@@ -1,0 +1,21 @@
+name: PsPolypy
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12.8
+  - numpy
+  - matplotlib
+  - jupyterlab
+  - notebook
+  - ipykernel
+  - nbconvert
+  - nbconvert-webpdf
+  - nbstripout
+  - scipy
+  - scikit-image
+  - pillow
+  - networkx
+  - watermark
+  - widgetsnbextension
+  - numba
+  - skan
