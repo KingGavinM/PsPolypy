@@ -16,25 +16,25 @@ Please see the following sections outlining the dependencies and installation in
 The dependencies for installing PsPolypy as well as their source is shown below.
 
 - **python 3.12.8**
-- **numpy** - ```conda```
-- **scipy** - ```conda```
-- **scikit-image** - ```conda```
-- **matplotlib** - ```conda```
-- **jupyter** - ```conda```
-- **pillow** - ```conda```
-- **networkx** - ```conda```
-- **nbstripout** - ```conda```
-- **skan** - ```conda conda-forge```
+- **numpy**
+- **scipy**
+- **scikit-image**
+- **matplotlib**
+- **jupyter**
+- **pillow**
+- **networkx**
+- **nbstripout**
+- **skan**
 
 ### Installation Walkthrough
 Create the conda environment by navigating to the `PsPolypy/src/` directory in your terminal and running one of the following:
 
 ```bash
 # If you wish to use the default environment name
-conda env create -f environment.yml
+conda env create -f PsPolypy.yml
 
 # If you want to use a custom environment name
-conda env create -f environment.yml -n your_environment_name
+conda env create -f PsPolypy.yml -n your_environment_name
 ```
 
 Activate the conda environment by running:

@@ -39,7 +39,7 @@ class Particle():
                  bbox: Tuple[int, int, int, int],
                  binary_mask: np.ndarray = None,
                  classification: str = None,
-                 particle_id: int = None) -> None:
+                 id: int = None) -> None:
         '''
         Initialize a Particle object.
 
@@ -79,7 +79,7 @@ class Particle():
         self._classification = classification
 
         # Set the particle id attribute.
-        self._particle_id = particle_id
+        self._id = id
 
         # Set the contour sampling attribute.
         self._contour_sampling = None
@@ -257,64 +257,82 @@ class Particle():
             # Append the correlation for this path to the list.
             self._tantan_correlations.append(corr)
 
-    def plot_particle(self, cmap = 'Greys_r'):
+    def plot_particle(self,
+                      ax: plt.Axes = None,
+                      **kwargs) -> plt.Axes:
         '''
         Plot the particle image.
 
         Args:
-            None
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object to plot the image on.
         Returns:
-            fig, ax:
-                The matplotlib figure and axis objects.
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object.
         '''
-        # Create the fig and ax.
-        fig, ax = plt.subplots(figsize=(4, 4))
-        # Set the title
-        if self._classification is None:
-            ax.set_title(f'Particle {self._particle_id}')
-        else:
-            ax.set_title(f'Particle {self._particle_id} - {self._classification}')
+        # Create the ax object if it is not set.
+        ax = ax or plt.gca()
         # Plot the image.
-        ax.imshow(self._image, cmap = cmap)
+        ax.imshow(self._image, **kwargs)
         # Return the fig and ax.
-        return fig, ax
+        return ax
     
-    def plot_skeleton(self, cmap = 'Greys_r'):
+    def plot_skeleton(self,
+                      ax: plt.Axes = None,
+                      **kwargs) -> plt.Axes:
         '''
-        Plot the particle skeleton and interpolated skeleton.
+        Plot the particle skeleton.
         
         Args:
-            None
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object to plot the image on.
+            **kwargs:
+                Keyword arguments to pass to matplotlib.pyplot.imshow.
         Returns:
             fig, ax:
                 The matplotlib figure and axis objects.
         '''
-        # Create the fig and ax.
-        fig, ax = plt.subplots(figsize=(4, 4))
-        # Set the title
-        if self._classification is None:
-            ax.set_title(f'Particle {self._particle_id} Skeleton')
-        else:
-            ax.set_title(f'Particle {self._particle_id} Skeleton - {self._classification}')
+        # Check to see if the ske
+        if self._skeleton is None:
+            ValueError('Skeleton attribute is not set. Skeletonize the particle before plotting.')
 
-        if self._skeleton is not None:
-            # Plot the skeleton
-            ax.imshow(self.skeleton.skeleton_image, cmap = cmap, alpha = 0.75)
-        else:
-            raise ValueError('Skeleton attribute is not set. Skeletonize the particle before plotting.')
+        # Create the ax object if it is not set.
+        ax = ax or plt.gca()
+
+        # Plot the skeleton
+        ax.imshow(self.skeleton.skeleton_image, **kwargs)
         
-        # Plot the interpolated skeletons. This only works if the interpolated skeleton coordinates are set.
-        if self._interp_skeleton_coordinates is not None:
-            for index, (splinex, spliney) in enumerate(self._interp_skeleton_coordinates):
-                ax.plot(spliney, splinex, lw=4, color='red', label = f'Path {index}')
-            ax.legend()
-        # if len(self._interp_skeleton_coordinates) > 0:
-        #     for index, (splinex, spliney) in enumerate(self._interp_skeleton_coordinates):
-        #         ax.plot(spliney, splinex, lw=1, label = f'Path {index}')
-        #     ax.legend()
+        # Return the ax.
+        return ax
+    
+    def plot_interpolated_skeleton(self,
+                                   ax: plt.Axes = None,
+                                   **kwargs) -> plt.Axes:
+        '''
+        Plot the interpolated skeleton of the particle.
+
+        Args:
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object to plot the image on.
+            **kwargs:
+                Keyword arguments to pass to matplotlib.pyplot.plot.
+        Returns:
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object.
+        '''
+        # Create the ax object if it is not set.
+        ax = ax or plt.gca()
+
+        # Check to see if the interpolated skeleton coordinates are set. If not, raise a ValueError.
+        if self._interp_skeleton_coordinates is None:
+            raise ValueError('Interpolated skeleton coordinates attribute is not set. Interpolate the skeleton before plotting.')
         
-        # Return the fig and ax.
-        return fig, ax
+        # Plot the interpolated skeletons.
+        for (splinex, spliney) in self._interp_skeleton_coordinates:
+            ax.plot(spliney, splinex, **kwargs)
+        
+        # Return the ax.
+        return ax
     
     @property
     def image(self) -> np.ndarray:
@@ -352,11 +370,11 @@ class Particle():
         return self._classification
     
     @property
-    def particle_id(self) -> int:
+    def id(self) -> int:
         '''
-        The unique particle id of the particle.
+        The unique id of the particle.
         '''
-        return self._particle_id
+        return self._id
     
     @property
     def skeleton(self) -> skan.Skeleton:
@@ -464,10 +482,10 @@ class Polydat():
         self._mean_tantan_correlation = None
 
         # Set the minimum contour length attribute.
-        self._min_contour_length = 0
+        self._min_fitting_length = 0
 
         # Set the maximum contour length attribute.
-        self._max_contour_length = np.inf
+        self._max_fitting_length = np.inf
 
         # Set the persistence length attribute.
         self._pl = 0
@@ -641,7 +659,7 @@ class Polydat():
                                     resolution = self._resolution,
                                     bbox = bbox,
                                     binary_mask = particle_mask,
-                                    particle_id = self._num_particles)
+                                    id = self._num_particles)
             
                 # Append the Particle object to the particles list.
                 self._particles.append(particle)
@@ -741,16 +759,16 @@ class Polydat():
         self._tantan_sem = self._tantan_std / np.sqrt(sample_count)
 
     def calc_persistence_length(self,
-                                min_contour_length: float = 0,
-                                max_contour_length: float = np.inf):
+                                min_fitting_length: float = 0,
+                                max_fitting_length: float = np.inf):
         '''
         Calculate the persistence length of the polymer particles using the Tan-Tan correlation method. The correlation will
         only be fit between the minimum and maximum contour lengths.
         
         Args:
-            min_contour_length (float):
+            min_fitting_length (float):
                 The minimum contour length to fit the exponential decay to. Default is 0.
-            max_contour_length (float):
+            max_fitting_length (float):
                 The maximum contour length to fit the exponential decay to. Default is np.inf.
         Returns:
             float:
@@ -760,11 +778,11 @@ class Polydat():
         xvals = self._contour_sampling
 
         # Get the mask for the xvalues between the minimum and maximum contour lengths.
-        inbetween_mask = (xvals >= min_contour_length) * (xvals <= max_contour_length)
+        inbetween_mask = (xvals >= min_fitting_length) * (xvals <= max_fitting_length)
 
         # Set the minimum and maximum contour lengths attributes for usage in the plotting methods.
-        self._min_contour_length = min_contour_length
-        self._max_contour_length = max_contour_length
+        self._min_fitting_length = min_fitting_length
+        self._max_fitting_length = max_fitting_length
 
         # Filter the xvals array to between the minimum and maximum contour lengths.
         xvals = xvals[inbetween_mask]
@@ -799,185 +817,257 @@ class Polydat():
 
     def plot_image(self,
                    index: int = 0,
-                   cmap = 'Greys_r'):
+                   ax: plt.Axes = None,
+                   **kwargs) -> plt.Axes:
         '''
         Plot a full field image of the polymer data.
 
         Args:
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object to plot the image on.
             index (int):
                 The index of the image to plot.
-            cmap (str):
-                The colormap to use for the image. Default is 'Greys_r'.
+            **kwargs:
+                Keyword arguments to pass to matplotlib.pyplot.imshow.
         Returns:
-            fig, ax:
-                The matplotlib figure and axis objects.
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object.
         '''
-        
-        # Plot the image.
-        fig, ax = plt.subplots(figsize=(5, 5))
-        ax.imshow(self._images[index], cmap=cmap)
-        ax.set_title(f'Polymer Field {index}')
-        return fig, ax
+        # If the axis object is not set, get the current axis.
+        ax = ax or plt.gca()
+
+        # Create the fig and ax.
+        ax.imshow(self._images[index], **kwargs)
+        return ax
     
     def plot_particle(self,
-                      index: int = 0):
+                      index: int,
+                      ax: plt.Axes = None,
+                      **kwargs) -> plt.Axes:
         '''
         Plot a single particle in the particles attribute.
 
         Args:
             index (int):
                 The index of the particle to plot.
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object to plot the image on.
         Returns:
-            fig, ax:
-                The matplotlib figure and axis objects.
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object.
         '''
-        return self._particles[index].plot_particle()
+        return self._particles[index].plot_particle(ax = ax, **kwargs)
     
     def plot_skeleton(self,
-                      index: int = 0):
+                      index: int,
+                      ax: plt.Axes = None,
+                      **kwargs) -> plt.Axes:
         '''
         Plot the skeleton of a single particle in the particles attribute.
 
         Args:
             index (int):
                 The index of the particle to plot.
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object to plot the image on.
+            **kwargs:
+                Keyword arguments to pass to matplotlib.pyplot.imshow.
         Returns:
-            fig, ax:
-                The matplotlib figure and axis objects.
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object.
         '''
-        return self._particles[index].plot_skeleton()
+        return self._particles[index].plot_skeleton(ax = ax, **kwargs)
+    
+    def plot_interpolated_skeleton(self,
+                                   index: int,
+                                   ax: plt.Axes = None,
+                                   **kwargs) -> plt.Axes:
+        '''
+        Plot the interpolated skeleton of a single particle in the particles attribute.
 
+        Args:
+            index (int):
+                The index of the particle to plot.
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object to plot the image on.
+            **kwargs:
+                Keyword arguments to pass to matplotlib.pyplot.plot.
+        Returns:
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object.
+        '''
+        return self._particles[index].plot_interpolated_skeleton(ax = ax, **kwargs)
+    
     def plot_contour_distribution(self,
-                                  **kwargs):
+                                  n_points: int = 100,
+                                  ax: plt.Axes = None,
+                                  **kwargs) -> plt.Axes:
         '''
         Plot the distribution of contour lengths for all particles. Uses Gaussian KDE to return a smooth distribution.
 
         Args:
-            None
+            n_points (int):
+                The number of points to use for the Gaussian KDE. Default is 100.
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object to plot the image on.
+            **kwargs:
+                Keyword arguments. Handles in the following manner:
+                - dist_color (str): The color of the distribution line. Default is 'Blue'.
+                - fill_color (str): The color to fill the distribution. Default is 'LightBlue'.
+                - vertical_linestyle (str): The linestyle of the vertical lines for the minimum and maximum contour lengths.
+                  Default is '--'.
+                - Remaining keyword arguments are passed to the matplotlib.pyplot.plot function.
+
         Returns:
-            fig, ax:
-                The matplotlib figure and axis objects.
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object.
         '''
 
-        # Handle Keyword Arguments for plotting.
-        figsize = kwargs.pop('figsize', (5, 5))
+        # Handle kwargs for plotting.
         dist_color = kwargs.pop('dist_color', 'Blue')
         fill_color = kwargs.pop('fill_color', 'LightBlue')
-        lw = kwargs.pop('lw', 2)
+        vertical_linestyle = kwargs.pop('vertical_linestyle', '--')
 
-        # If any keyword arguments are left, they aren't handled. Raise a ValueError.
-        if kwargs:
-            raise ValueError(f'Invalid keyword arguments: {kwargs.keys()}')
+        # Create the ax object if it is not set.
+        ax = ax or plt.gca()
 
         # Create a distribution of all the polymer branch lengths.
-        xvals = np.linspace(0, self._contour_lengths.max(), 1000)
+        xvals = np.linspace(0, self._contour_lengths.max(), n_points)
         kde = gaussian_kde(self._contour_lengths)
 
-        # Plot the distribution.
-        fig, ax = plt.subplots(figsize = figsize)
-
-        if self._min_contour_length != 0 or self._max_contour_length != np.inf:
-
-            inbetween_mask = (xvals >= self._min_contour_length) * (xvals <= self._max_contour_length)
-            less_mask = xvals <= self._min_contour_length
-            greater_mask = xvals >= self._max_contour_length
+        # If the minimum and maximum contour lengths are set, only color the region between the minimum and maximum, plot
+        # the excluded regions in gray and plot vertical lines at the minimum and maximum contour lengths.
+        if self._min_fitting_length != 0 or self._max_fitting_length != np.inf:
+            
+            # Get the mask for the xvalues less than, in between, and greather than the min and max contour lengths.
+            inbetween_mask = (xvals >= self._min_fitting_length) * (xvals <= self._max_fitting_length)
+            less_mask = xvals <= self._min_fitting_length
+            greater_mask = xvals >= self._max_fitting_length
 
             # Plot the distribution between the minimum and maximum contour lengths.
-            ax.plot(xvals[inbetween_mask], kde(xvals[inbetween_mask]), color = dist_color, lw = lw, label = 'Fitting Distribution')
+            ax.plot(xvals[inbetween_mask], kde(xvals[inbetween_mask]), color = dist_color, label = 'Fitting Distribution', **kwargs)
             # Fill the distribution between the minimum and maximum contour lengths.
             ax.fill_between(xvals[inbetween_mask], kde(xvals[inbetween_mask]), color = fill_color)
+
             # Plot the distribution outside the minimum and maximum contour lengths.
-            ax.plot(xvals[less_mask], kde(xvals[less_mask]), color = 'Gray', alpha = 0.5, label = 'Excluded Distribution')
-            ax.plot(xvals[greater_mask], kde(xvals[greater_mask]), color = 'Gray', alpha = 0.5)
+            ax.plot(xvals[less_mask], kde(xvals[less_mask]), color = 'Gray', alpha = 0.5, label = 'Excluded Distribution', **kwargs)
+            ax.plot(xvals[greater_mask], kde(xvals[greater_mask]), color = 'Gray', alpha = 0.5, **kwargs)
 
             # Draw the vertical lines for the minimum and maximum contour lengths.
-            ax.axvline(self._min_contour_length, color = dist_color, linestyle = '--')
-            ax.axvline(self._max_contour_length, color = dist_color, linestyle = '--')
+            ax.axvline(self._min_fitting_length, color = dist_color, linestyle = vertical_linestyle)
+            ax.axvline(self._max_fitting_length, color = dist_color, linestyle = vertical_linestyle)
 
         else:
             # Plot the distribution.
-            ax.plot(xvals, kde(xvals), color = dist_color, lw = lw, label = 'Contour Length Distribution')
+            ax.plot(xvals, kde(xvals), color = dist_color, label = 'Contour Length Distribution', **kwargs)
             # Fill the distribution.
             ax.fill_between(xvals, kde(xvals), color = fill_color)
-
-        # Set the title, xlabel, and ylabel.
-        ax.set_title('Contour Length Distribution')
-        ax.set_xlabel(f'Contour Length ({self._resolution:.1f} nm)')
-        ax.set_ylabel('Density')
-        # Add a legend.
-        ax.legend()
-
-        # Return the figure and axis objects.
-        return fig, ax
+        
+        # Return the ax.
+        return ax
     
     def plot_mean_tantan_correlation(self,
                                      error_bars: bool = False,
-                                     **kwargs):
+                                     ax: plt.Axes = None,
+                                     **kwargs) -> plt.Axes:
         '''
         Plot the Tan-Tan correlation for all particles.
 
         Args:
             error_bars (bool):
                 Whether or not to plot error bars. Default is False.
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object to plot the image on.
+            **kwargs:
+                Todo.
         Returns:
-            fig, ax:
-                The matplotlib figure and axis objects.
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object.
         '''
-        # If error bars are set, plot the mean Tan-Tan correlation with error bars. Otherwise, plot the mean Tan-Tan
-        # correlation without error bars.
+        # Handle Keyword Arguments for plotting.
+        color = kwargs.pop('color', 'Blue')
+        ecolor = kwargs.pop('ecolor', 'LightBlue')
+        fmt = kwargs.pop('fmt', '.')
+        vertical_linestyle = kwargs.pop('vertical_linestyle', '--')
+
+        # Create the ax object if it is not set.
+        ax = ax or plt.gca()
+
+        # If the error bars are set, the error is the standard error of the mean. Otherwise, the error is 0.
         if error_bars:
             error = self._tantan_sem
         else:
             error = np.zeros_like(self._mean_tantan_correlation)
 
-        # Handle Keyword Arguments for plotting.
-        figsize = kwargs.pop('figsize', (8, 8))
-        lw = kwargs.pop('lw', 2)
-        corr_color = kwargs.pop('corr_color', 'Blue')
-        error_color = kwargs.pop('error_color', 'LightBlue')
-        fit_color = kwargs.pop('fit_color', 'Orange')
-
-        # If any keyword arguments are left, they aren't handled. Raise a ValueError.
-        if kwargs:
-            raise ValueError(f'Invalid keyword arguments: {kwargs.keys()}')
-        
-        # Plot the Tan-Tan correlation.
-        fig, ax = plt.subplots(figsize=figsize)
-
-
-        # If the minimum and maximum contour lengths are set, plot a vertical line at the minimum and maximum contour
-        # lengths.
-        if self._min_contour_length != 0 or self._max_contour_length != np.inf:
+        # If the minimum and maximum contour lengths are set, only color the region between the minimum and maximum, plot
+        # the excluded regions in gray and plot vertical lines at the minimum and maximum contour lengths.
+        if self._min_fitting_length != 0 or self._max_fitting_length != np.inf:
             
-            inbetween_mask = (self._contour_sampling >= self._min_contour_length) * (self._contour_sampling <= self._max_contour_length)
+            # Get the mask for the xvalues in between the min and max contour lengths
+            inbetween_mask = (self._contour_sampling >= self._min_fitting_length) * (self._contour_sampling <= self._max_fitting_length)
 
-            # Plot the mean Tan-Tan correlation with error bars.
-            ax.errorbar(self._contour_sampling[inbetween_mask], self._mean_tantan_correlation[inbetween_mask],
-                        yerr = error[inbetween_mask], fmt = '.', color = corr_color, label = 'Fitting Abs Mean Correlation', ecolor = error_color)
-            ax.errorbar(self._contour_sampling[~inbetween_mask], self._mean_tantan_correlation[~inbetween_mask],
-                        yerr = error[~inbetween_mask], fmt = '.', color = 'Gray', alpha = 0.5, label = 'Excluded Abs Mean Correlation', ecolor = 'LightGray')
+            # Plot the mean Tan-Tan correlation between the minimum and maximum contour lengths with error bars.
+            ax.errorbar(self._contour_sampling[inbetween_mask],
+                        self._mean_tantan_correlation[inbetween_mask],
+                        yerr = error[inbetween_mask],
+                        color = color,
+                        ecolor = ecolor,
+                        fmt = fmt,
+                        label = 'Fitting Abs Mean Correlation',
+                        **kwargs)
+            # Plot the mean Tan-Tan correlation outside the minimum and maximum contour lengths with error bars.
+            ax.errorbar(self._contour_sampling[~inbetween_mask],
+                        self._mean_tantan_correlation[~inbetween_mask],
+                        yerr = error[~inbetween_mask],
+                        color = 'Gray',
+                        ecolor = 'LightGray',
+                        alpha = 0.5,
+                        fmt = fmt,
+                        label = 'Excluded Abs Mean Correlation',
+                        **kwargs)
             
             # Draw the verical lines for the minimum and maximum contour lengths.
-            ax.axvline(self._min_contour_length, color = corr_color, linestyle = '--')
-            ax.axvline(self._max_contour_length, color = corr_color, linestyle = '--')
+            ax.axvline(self._min_fitting_length, color = color, linestyle = vertical_linestyle)
+            ax.axvline(self._max_fitting_length, color = color, linestyle = vertical_linestyle)
+
         else:
             # Plot the mean Tan-Tan correlation with error bars.
-            ax.errorbar(self._contour_sampling, self._mean_tantan_correlation,
-                        yerr = error, fmt = '.', color = corr_color, label = 'Abs Mean Correlation', ecolor = error_color)
+            ax.errorbar(self._contour_sampling,
+                        self._mean_tantan_correlation,
+                        yerr = error,
+                        color = color,
+                        ecolor = ecolor,
+                        fmt = fmt,
+                        label = 'Abs Mean Correlation',
+                        **kwargs)
+        
+        return ax
 
-        if self._pl != 0:
-            # Plot the fitted exponential decay.
-            ax.plot(self._contour_sampling, self.__exp_decay(self._contour_sampling, self._pl),
-                    color=fit_color, lw=lw, label = f'Exponential Decay Fit (PL = {self._pl*self._resolution:.1f} nm)')
-          
-        ax.set_title('Mean Tan-Tan Correlation')
-        ax.set_xlabel(f'Contour Length ({self._resolution:.1f} nm)')
-        ax.set_ylabel('Correlation')
-        ax.set_ylim([0,1.05])
+    def plot_fitted_tantan_correlation(self,
+                                       ax: plt.Axes = None,
+                                       **kwargs) -> plt.Axes:
+        '''
+        Plot the fitted exponential decay of the Tan-Tan correlation.
 
-        ax.legend()
+        Args:
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object to plot the image on.
+            **kwargs:
+                Keyword arguments to pass to matplotlib.pyplot.plot.
+        Returns:
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object.
+        '''
+        # Create the ax object if it is not set.
+        ax = ax or plt.gca()
 
-        return fig, ax
+        # Plot the fitted exponential decay.
+        ax.plot(self._contour_sampling,
+                self.__exp_decay(self._contour_sampling, self._pl),
+                label = f'Exponential Decay Fit (PL = {self._pl*self._resolution:.1f} nm)',
+                **kwargs)
+        
+        return ax
 
     def print_summary(self):
         '''
@@ -1080,11 +1170,3 @@ class Polydat():
         The covariance of the persistence length of the polymer particles in nanometers.
         '''
         return self._plcov
-
-    @property
-    def percentile_threshold(self) -> float:
-        '''
-        The threshold of the nth percentile of the contour length distribution. This is used to fit the exponential decay
-        during the calculation of the persistence length. 
-        '''
-        return self._percentile_threshold
