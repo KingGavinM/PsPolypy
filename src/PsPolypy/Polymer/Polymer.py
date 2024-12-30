@@ -1,21 +1,21 @@
-from PIL import Image
-import numpy as np
 from typing import Any, Tuple, Dict
+
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
 
 from scipy.interpolate import splprep, splev
 from scipy.stats import gaussian_kde
-from scipy.optimize import curve_fit, brentq
-from scipy.integrate import quad
+from scipy.optimize import curve_fit
 
 from skimage.transform import resize
 from skimage.filters import threshold_otsu
 from skimage.measure import label, regionprops
 from skimage.morphology import skeletonize
 
-import matplotlib.pyplot as plt
-
 import skan
 import networkx as nx
+import lmfit
 
 __all__ = ['Particle', 'Polydat']
 
@@ -146,7 +146,7 @@ class Particle():
 
         # Check if the particle is classified as a loop:
         elif np.all(unique_branch_types == 3):
-            self._classification = 'Loop'
+            self._classification = 'Looped'
 
         # If the particle does not fit any of the above classifications, set the classification to unknown.
         else:
@@ -215,14 +215,9 @@ class Particle():
             # Append the interpolated derivative for this path.
             self._interp_skeleton_derivatives.append(splev(contour_normalized, tck, der=1))
 
-    def calc_tantan_correlation(self):
+    def calc_tantan_correlation(self) -> None:
         '''
-        Calculate the persistence length of the polymer particle using the Tan-Tan correlation for all skeleton paths. 
-        The persistence length is calculated using the formula:
-        <cos(theta)> = exp(-L/Lp)
-        where L is the contour length of the skeleton, and Lp is the persistence length.
-
-        The persistence length is set to the tantan_pl attribute.
+        Calculate the tangent-tangent correlation for each path in the particle. 
 
         Args:
             None
@@ -443,7 +438,7 @@ class Polydat():
     def __init__(self,
                  images: list[np.ndarray] = None,
                  resolution: float = None,
-                 **metadata: Any):
+                 **metadata: Any) -> None:
         '''
         Initialization method for the Polydat_Multi object.
 
@@ -487,12 +482,6 @@ class Polydat():
         # Set the maximum contour length attribute.
         self._max_fitting_length = np.inf
 
-        # Set the persistence length attribute.
-        self._pl = 0
-
-        # Set the persistence length covariance attribute.
-        self._plcov = 0
-
     @classmethod
     def from_images(cls,
                     filepaths: list[str],
@@ -524,20 +513,20 @@ class Polydat():
         # Create the Polydat object.
         return cls(images = images, resolution = resolution, **metadata)
 
-    def __exp_decay(self, x, Lp):
+    def __exponential_model(self, x, lp):
         '''
-        Exponential decay function for curve fitting.
+        Exponential decay model for curve fitting.
 
         Args:
             x (float):
                 The x value.
-            Lp (float):
+            lp (float):
                 The persistence length.
         Returns:
             float:
                 The exponential decay value.
         '''
-        return np.exp(-x/(2*Lp))
+        return np.exp(-x/(2*lp))
     
     ########################
     ##### Main Methods #####
@@ -545,7 +534,7 @@ class Polydat():
 
     def add_image(self,
                   filepath: str,
-                  resolution: float):
+                  resolution: float) -> None:
         '''
         Load an image file and add it to the images attribute.
 
@@ -569,7 +558,7 @@ class Polydat():
         
     def upscale(self,
                 magnification: float,
-                order = 3):
+                order = 3) -> None:
         '''
         Upscale the full field images by a given magnification factor and interpolation order. The images are interpolated
         using the skimage.transform.resize function.
@@ -603,7 +592,7 @@ class Polydat():
 
     def segment_particles(self,
                           minimum_area = 10,
-                          padding = 1):
+                          padding = 1) -> None:
         '''
         Segment the particles in the full field images. A otsu threshold is applied to separate the particles from the 
         background, connected regions are labeled, and bounding boxes are calculated for each particle. The Particle objects
@@ -667,7 +656,7 @@ class Polydat():
                 # Increment the number of particles attribute.
                 self._num_particles += 1
 
-    def skeletonize_particles(self, method = 'zhang'):
+    def skeletonize_particles(self, method = 'zhang') -> None:
         '''
         Skeletonize the particles in particles attribute.
 
@@ -681,7 +670,7 @@ class Polydat():
         for particle in self._particles:
             particle.skeletonize_particle(method = method)
 
-    def classify_particles(self):
+    def classify_particles(self) -> None:
         '''
         Classify the particles in the particles attribute.
 
@@ -696,7 +685,7 @@ class Polydat():
     def interpolate_skeletons(self,
                               step_size: float,
                               k: int = 3,
-                              s: float = 0.5):
+                              s: float = 0.5) -> None:
         '''
         Interpolate the particle skeleton for each particle in the particles attribute. This is necessary for calculating
         the persistence length with subpixel accuracy. Each path is interpolated using a spline of order k with a smoothing
@@ -718,12 +707,20 @@ class Polydat():
             self._contour_lengths.extend(particle.contour_lengths)
         self._contour_lengths = np.array(self._contour_lengths)
 
-    def calc_tantan_correlations(self):
+    def calc_tantan_correlations(self,
+                                 included_classifications: list[str] = ['Linear', 'Branched', 'Loop', 'Branched-Looped']) -> None:
         '''
-        Calculate the persistence length of the polymer particles using the Tan-Tan correlation method.
+        Calculate the Tan-Tan correlation a set of particles. The correlation is calculated for each
+        path in each particle. The correlation is then averaged over all particles and the absolute value is taken. The
+        standard deviation and standard error of the mean are also calculated.
+
+        Optionally, the user can specify which classifications to include in the correlation calculation. By default, all
+        classifications are included.
 
         Args:
-            None
+            included_classifications (list):
+                The list of classifications to include in the correlation calculation. 
+                Default is ['Linear', 'Branched', 'Loop', 'Branched-Looped'].
         Returns:
             None
         '''
@@ -731,11 +728,15 @@ class Polydat():
         contour_samplings = []
         tantan_correlations = []
 
-        # Calculate the Tan-Tan correlation for each particle.
-        for particle in self._particles:
-            particle.calc_tantan_correlation()
-            contour_samplings.extend(particle.contour_samplings)
-            tantan_correlations.extend(particle.tantan_correlations)
+        # Filter the particles by the included classifications.
+        for classification in included_classifications:
+            particles = self.get_filtered_particles(classification)
+
+            # Calculate the Tan-Tan correlation for each particle matching the classification.
+            for particle in particles:
+                particle.calc_tantan_correlation()
+                contour_samplings.extend(particle.contour_samplings)
+                tantan_correlations.extend(particle.tantan_correlations)
 
         # Find the maximum size of the contour arrays.
         max_size = max([len(contour) for contour in contour_samplings])
@@ -753,52 +754,57 @@ class Polydat():
 
         # Calculate the standard deviation for error bars.
         self._mean_tantan_std = np.nanstd(padded_correlations, axis=0)
-
         # Calculate the SEM (optional, preferred for error bars).
         sample_count = np.sum(~np.isnan(padded_correlations), axis=0)
         self._mean_tantan_sem = self._mean_tantan_std / np.sqrt(sample_count)
-
-    def calc_persistence_length(self,
-                                min_fitting_length: float = 0,
-                                max_fitting_length: float = np.inf):
+    
+    def calc_tantan_lp(self,
+                       lp_init = 10,
+                       min_fitting_length: float = 0,
+                       max_fitting_length: float = np.inf) -> None:
         '''
         Calculate the persistence length of the polymer particles using the Tan-Tan correlation method. The correlation will
-        only be fit between the minimum and maximum contour lengths.
-        
+        only be fit between the minimum and maximum contour lengths. This method uses the lmfit package for curve fitting.
+
+        The persistence length is calculated using the formula:
+        <cos(theta)> = exp(-L/Lp)
+        where L is the contour length of the skeleton, and Lp is the persistence length.
+
         Args:
             min_fitting_length (float):
                 The minimum contour length to fit the exponential decay to. Default is 0.
             max_fitting_length (float):
                 The maximum contour length to fit the exponential decay to. Default is np.inf.
         Returns:
-            float:
-                The persistence length of the polymer particles.
-        '''        
-        # Get the contour array containing no nan values.
-        xvals = self._contour_sampling
-
+            None
+        '''
         # Get the mask for the xvalues between the minimum and maximum contour lengths.
-        inbetween_mask = (xvals >= min_fitting_length) * (xvals <= max_fitting_length)
+        inbetween_mask = (self._contour_sampling >= min_fitting_length) * (self._contour_sampling <= max_fitting_length)
 
         # Set the minimum and maximum contour lengths attributes for usage in the plotting methods.
         self._min_fitting_length = min_fitting_length
         self._max_fitting_length = max_fitting_length
 
         # Filter the xvals array to between the minimum and maximum contour lengths.
-        xvals = xvals[inbetween_mask]
+        xvals = self._contour_sampling[inbetween_mask]
 
         # Filter the mean_correlations array to the same size as xvals.
         yvals = self._mean_tantan_correlation[inbetween_mask]
 
-        # Fit the exponential decay to the data.
-        popt, pcov = curve_fit(self.__exp_decay, xvals, yvals, p0 = 10)
+        # Filter the mean_tantan_sem array to the same size as xvals and invert it to get the weights.
+        weights = 1 / self._mean_tantan_sem[inbetween_mask]
 
-        # Set the persistence length attribute.
-        self._pl = popt[0]
-        # Set the persistence covariance attribute.
-        self._plcov = pcov
+        # Create a Model object
+        model = lmfit.Model(self.__exponential_model)
 
-        return popt[0] * self._resolution, pcov
+        # Create a Parameters object
+        params = model.make_params(lp = lp_init)
+
+        # Fit the model to the data.
+        result = model.fit(yvals, params, x = xvals, weights = weights)
+
+        # Set the tantan_fit_result attribute.
+        self._tantan_fit_result = result
 
     def get_filtered_particles(self,
                                filter_str: str) -> list:
@@ -901,10 +907,11 @@ class Polydat():
     def plot_contour_distribution(self,
                                   n_points: int = 100,
                                   ax: plt.Axes = None,
-                                  dist_color = 'Blue',
-                                  fill_color = 'LightBlue',
-                                  vertical_linestyle = '--',
-                                  **kwargs) -> plt.Axes:
+                                  inc_dist_kwargs: dict = None,
+                                  inc_fill_kwargs: dict = None,
+                                  exc_dist_kwargs: dict = None,
+                                  exc_fill_kwargs: dict = None,
+                                  vline_kwargs: dict = None) -> plt.Axes:
         '''
         Plot the distribution of contour lengths for all particles. Uses Gaussian KDE to return a smooth distribution.
 
@@ -913,21 +920,43 @@ class Polydat():
                 The number of points to use for the Gaussian KDE. Default is 100.
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object to plot the image on.
-            dist_color (str):
-                The color of the distribution. Default is 'Blue'.
-            fill_color (str):
-                The color to fill the distribution. Default is 'LightBlue'.
-            vertical_linestyle (str):
-                The linestyle of the vertical lines for the minimum and maximum contour lengths. Default is '--'.
-            **kwargs:
-                Keyword arguments to pass to matplotlib.pyplot.plot.
-
+            inc_dist_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.plot for the included distribution. (Between the minimum and
+                maximum contour lengths used for fitting) If the minimum and maximum contour lenths are 0 and np.inf, these
+                kwargs will be used for the entire distribution.
+                Default is None
+            inc_fill_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.fill_between for the indcluded distribution.
+                Default is None.
+            exc_dist_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.plot for the excluded distribution. (Outside the minimum and
+                maximum contour lengths used for fitting) 
+                Default is None.
+            exc_fill_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.fill_between for the excluded distribution.
+                Default is None
+            vline_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.axvline for the vertical lines at the minimum and maximum
+                contour lengths.
+                Default is None
         Returns:
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object.
         '''
         # Create the ax object if it is not set.
         ax = ax or plt.gca()
+
+        # Handle the default kwargs if they are none.
+        if inc_dist_kwargs is None:
+            inc_dist_kwargs = {}
+        if inc_fill_kwargs is None:
+            inc_fill_kwargs = {}
+        if exc_dist_kwargs is None:
+            exc_dist_kwargs = {}
+        if exc_fill_kwargs is None:
+            exc_fill_kwargs = {}
+        if vline_kwargs is None:
+            vline_kwargs = {}
 
         # Create a distribution of all the polymer branch lengths.
         xvals = np.linspace(0, self._contour_lengths.max(), n_points)
@@ -943,23 +972,29 @@ class Polydat():
             greater_mask = xvals >= self._max_fitting_length
 
             # Plot the distribution between the minimum and maximum contour lengths.
-            ax.plot(xvals[inbetween_mask], kde(xvals[inbetween_mask]), color = dist_color, label = 'Fitting Distribution', **kwargs)
+            ax.plot(xvals[inbetween_mask], kde(xvals[inbetween_mask]), **inc_dist_kwargs)
             # Fill the distribution between the minimum and maximum contour lengths.
-            ax.fill_between(xvals[inbetween_mask], kde(xvals[inbetween_mask]), color = fill_color)
+            ax.fill_between(xvals[inbetween_mask], kde(xvals[inbetween_mask]), **inc_fill_kwargs)
 
             # Plot the distribution outside the minimum and maximum contour lengths.
-            ax.plot(xvals[less_mask], kde(xvals[less_mask]), color = 'Gray', alpha = 0.5, label = 'Excluded Distribution', **kwargs)
-            ax.plot(xvals[greater_mask], kde(xvals[greater_mask]), color = 'Gray', alpha = 0.5, **kwargs)
+            ax.plot(xvals[less_mask], kde(xvals[less_mask]), **exc_dist_kwargs)
+            ax.fill_between(xvals[less_mask], kde(xvals[less_mask]), **exc_fill_kwargs)
+
+            # Create a copy of the dist kwargs without the label so it isn't shown in the legend twice.
+            exc_dist_kwargs = exc_dist_kwargs.copy()
+            exc_dist_kwargs.pop('label', None)
+            ax.plot(xvals[greater_mask], kde(xvals[greater_mask]), **exc_dist_kwargs)
+            ax.fill_between(xvals[greater_mask], kde(xvals[greater_mask]), **exc_fill_kwargs)
 
             # Draw the vertical lines for the minimum and maximum contour lengths.
-            ax.axvline(self._min_fitting_length, color = dist_color, linestyle = vertical_linestyle)
-            ax.axvline(self._max_fitting_length, color = dist_color, linestyle = vertical_linestyle)
+            ax.axvline(self._min_fitting_length, **vline_kwargs)
+            ax.axvline(self._max_fitting_length, **vline_kwargs)
 
         else:
             # Plot the distribution.
-            ax.plot(xvals, kde(xvals), color = dist_color, label = 'Contour Length Distribution', **kwargs)
+            ax.plot(xvals, kde(xvals), **inc_dist_kwargs)
             # Fill the distribution.
-            ax.fill_between(xvals, kde(xvals), color = fill_color)
+            ax.fill_between(xvals, kde(xvals), **inc_fill_kwargs)
         
         # Return the ax.
         return ax
@@ -967,11 +1002,9 @@ class Polydat():
     def plot_mean_tantan_correlation(self,
                                      error_bars: bool = False,
                                      ax: plt.Axes = None,
-                                     color = 'Blue',
-                                     ecolor = 'LightBlue',
-                                     fmt = '.',
-                                     vertical_linestyle = '--',
-                                     **kwargs) -> plt.Axes:
+                                     inc_kwargs: dict = None,
+                                     exc_kwargs: dict = None,
+                                     vline_kwargs: dict = None) -> plt.Axes:
         '''
         Plot the Tan-Tan correlation for all particles.
 
@@ -980,22 +1013,33 @@ class Polydat():
                 Whether or not to plot error bars. Default is False.
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object to plot the image on.
-            color (str):
-                The color of the mean correlation. Default is 'Blue'.
-            ecolor (str):
-                The color of the error bars. Default is 'LightBlue'.
-            fmt (str):
-                The format of the data points. Default is '.'.
-            vertical_linestyle (str):
-                The linestyle of the vertical lines for the minimum and maximum contour lengths. Default is '--'.
-            **kwargs:
-                Keyword arguments to pass to matplotlib.pyplot.errorbar.
+            inc_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.errorbar for the included data points. (Between the minimum
+                and maximum contour lengths used for fitting) If the minimum and maximum contour lenths are 0 and np.inf,
+                these kwargs will be used for the entire dataset.
+                Default is None.
+            exc_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.errorbar for the excluded data points. (Outside the minimum
+                and maximum contour lengths used for fitting) 
+                Default is None.
+            vline_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.axvline for the vertical lines at the minimum and maximum
+                contour lengths.
+                Default is None.
         Returns:
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object.
         '''
         # Create the ax object if it is not set.
         ax = ax or plt.gca()
+
+        # Handle the default kwargs if they are none.
+        if inc_kwargs is None:
+            inc_kwargs = {}
+        if exc_kwargs is None:
+            exc_kwargs = {}
+        if vline_kwargs is None:
+            vline_kwargs = {}
 
         # If the error bars are set, the error is the standard error of the mean. Otherwise, the error is 0.
         if error_bars:
@@ -1014,50 +1058,44 @@ class Polydat():
             ax.errorbar(self._contour_sampling[inbetween_mask],
                         self._mean_tantan_correlation[inbetween_mask],
                         yerr = error[inbetween_mask],
-                        color = color,
-                        ecolor = ecolor,
-                        fmt = fmt,
-                        label = 'Fitting Abs Mean Correlation',
-                        **kwargs)
+                        **inc_kwargs)
             # Plot the mean Tan-Tan correlation outside the minimum and maximum contour lengths with error bars.
             ax.errorbar(self._contour_sampling[~inbetween_mask],
                         self._mean_tantan_correlation[~inbetween_mask],
                         yerr = error[~inbetween_mask],
-                        color = 'Gray',
-                        ecolor = 'LightGray',
-                        alpha = 0.5,
-                        fmt = fmt,
-                        label = 'Excluded Abs Mean Correlation',
-                        **kwargs)
+                        **exc_kwargs)
             
             # Draw the verical lines for the minimum and maximum contour lengths.
-            ax.axvline(self._min_fitting_length, color = color, linestyle = vertical_linestyle)
-            ax.axvline(self._max_fitting_length, color = color, linestyle = vertical_linestyle)
+            ax.axvline(self._min_fitting_length, **vline_kwargs)
+            ax.axvline(self._max_fitting_length, **vline_kwargs)
 
         else:
             # Plot the mean Tan-Tan correlation with error bars.
             ax.errorbar(self._contour_sampling,
                         self._mean_tantan_correlation,
                         yerr = error,
-                        color = color,
-                        ecolor = ecolor,
-                        fmt = fmt,
-                        label = 'Abs Mean Correlation',
-                        **kwargs)
+                        **inc_kwargs)
         
         return ax
 
-    def plot_fitted_tantan_correlation(self,
-                                       ax: plt.Axes = None,
-                                       **kwargs) -> plt.Axes:
+    def plot_mean_tantan_correlation_fit(self,
+                                         ax: plt.Axes = None,
+                                         show_init: bool = False,
+                                         fit_kwargs: dict = None,
+                                         init_kwargs: dict = None) -> plt.Axes:
         '''
-        Plot the fitted exponential decay of the Tan-Tan correlation.
+        Plot the fitted exponential decay of the mean Tan-Tan correlation.
 
         Args:
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object to plot the image on.
-            **kwargs:
-                Keyword arguments to pass to matplotlib.pyplot.plot.
+            fit_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.plot for the fitted exponential decay.
+                Default is None.
+            init_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.plot for the initial guess of the exponential decay.
+                Only used if show_init is True.
+                Default is None. 
         Returns:
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object.
@@ -1065,15 +1103,26 @@ class Polydat():
         # Create the ax object if it is not set.
         ax = ax or plt.gca()
 
-        # Plot the fitted exponential decay.
+        # Handle the default kwargs if they are none.
+        if fit_kwargs is None:
+            fit_kwargs = {}
+        if init_kwargs is None:
+            init_kwargs = {}
+
+        # Plot the fitted exponential model.
         ax.plot(self._contour_sampling,
-                self.__exp_decay(self._contour_sampling, self._pl),
-                label = f'Exponential Decay Fit (PL = {self._pl*self._resolution:.1f} nm)',
-                **kwargs)
+                self.__exponential_model(self._contour_sampling, self._tantan_fit_result.params['lp'].value),
+                **fit_kwargs)
+        
+        # If show_init is true, also plot the initial guess.
+        if show_init:
+            ax.plot(self._contour_sampling,
+                    self.__exponential_model(self._contour_sampling, self._tantan_fit_result.params['lp'].init_value),
+                    **init_kwargs)
         
         return ax
 
-    def print_summary(self):
+    def print_summary(self) -> None:
         '''
         Print a summary of the polymer data.
 
@@ -1084,23 +1133,23 @@ class Polydat():
         '''
 
         print('Polymer Data Summary')
-        print('---------------------')
+        print('-'*57)
         print('Image Stats:')
-        print(f'Number of Images:\t\t{len(self._images)}')
-        print(f'Interpolated:\t\t\t{self._metadata.get("upscaled", False)}')
-        print(f'Resolution:\t\t\t{self._resolution:.1f} nm/pixel')
-        print('---------------------')
+        print(f'Number of Images:\t\t\t{len(self._images)}')
+        print(f'Interpolated:\t\t\t\t{self._metadata.get("upscaled", False)}')
+        print(f'Resolution:\t\t\t\t{self._resolution:.1f} nm/pixel')
+        print('-'*57)
         print('Particle Stats:')
-        print(f'Number of Particles:\t\t{self._num_particles}')
-        print(f'Linear Particles:\t\t{len(self.get_filtered_particles("Linear"))}')
-        print(f'Branched Particles:\t\t{len(self.get_filtered_particles("Branched"))}')
-        print(f'Branched-Looped Particles:\t{len(self.get_filtered_particles("Branched-Looped"))}')
-        print(f'Looped Particles:\t\t{len(self.get_filtered_particles("Loop"))}')
-        print(f'Unknown Particles:\t\t{len(self.get_filtered_particles("Unknown"))}')
-        print('---------------------')
+        print(f'Number of Particles:\t\t\t{self._num_particles}')
+        print(f'Linear Particles:\t\t\t{len(self.get_filtered_particles("Linear"))}')
+        print(f'Branched Particles:\t\t\t{len(self.get_filtered_particles("Branched"))}')
+        print(f'Branched-Looped Particles:\t\t{len(self.get_filtered_particles("Branched-Looped"))}')
+        print(f'Looped Particles:\t\t\t{len(self.get_filtered_particles("Looped"))}')
+        print(f'Unknown Particles:\t\t\t{len(self.get_filtered_particles("Unknown"))}')
+        print('-'*57)
         print('Persistence Length Stats:')
-        print(f'  Mean Persistence Length:\t{self._pl * self._resolution:.1f} nm')
-        print(f'  Standard Deviation:\t\t{np.sqrt(np.diag(self._plcov))[0] * self._resolution:.1f} nm')
+        print(f'Tan-Tan Correlation lp:\t\t\t{self._tantan_fit_result.params["lp"].value * self._resolution:.1f} +/- {self._tantan_fit_result.params["lp"].stderr * self._resolution:.1f} nm')
+        print(f'Tan-Tan Correlation Reduced Chi^2:\t{self._tantan_fit_result.redchi:.2f}')
         
     @property
     def images(self) -> list[np.ndarray]:
@@ -1159,18 +1208,10 @@ class Polydat():
         path in each particle. 
         '''
         return self._mean_tantan_correlation
-
-
+    
     @property
-    def pl(self) -> float:
+    def tantan_fit_result(self) -> lmfit.model.ModelResult:
         '''
-        The persistence length of the polymer particles in nanometers.
+        The lmfit model result of the Tan-Tan correlation fit.
         '''
-        return self._pl
-
-    @property
-    def plcov(self) -> float:
-        '''
-        The covariance of the persistence length of the polymer particles in nanometers.
-        '''
-        return self._plcov
+        return self._tantan_fit_result
