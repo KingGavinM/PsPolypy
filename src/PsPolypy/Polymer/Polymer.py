@@ -752,11 +752,11 @@ class Polydat():
         self._mean_tantan_correlation = np.abs(np.nanmean(padded_correlations, axis = 0))
 
         # Calculate the standard deviation for error bars.
-        self._tantan_std = np.nanstd(padded_correlations, axis=0)
+        self._mean_tantan_std = np.nanstd(padded_correlations, axis=0)
 
         # Calculate the SEM (optional, preferred for error bars).
         sample_count = np.sum(~np.isnan(padded_correlations), axis=0)
-        self._tantan_sem = self._tantan_std / np.sqrt(sample_count)
+        self._mean_tantan_sem = self._mean_tantan_std / np.sqrt(sample_count)
 
     def calc_persistence_length(self,
                                 min_fitting_length: float = 0,
@@ -901,6 +901,9 @@ class Polydat():
     def plot_contour_distribution(self,
                                   n_points: int = 100,
                                   ax: plt.Axes = None,
+                                  dist_color = 'Blue',
+                                  fill_color = 'LightBlue',
+                                  vertical_linestyle = '--',
                                   **kwargs) -> plt.Axes:
         '''
         Plot the distribution of contour lengths for all particles. Uses Gaussian KDE to return a smooth distribution.
@@ -910,24 +913,19 @@ class Polydat():
                 The number of points to use for the Gaussian KDE. Default is 100.
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object to plot the image on.
+            dist_color (str):
+                The color of the distribution. Default is 'Blue'.
+            fill_color (str):
+                The color to fill the distribution. Default is 'LightBlue'.
+            vertical_linestyle (str):
+                The linestyle of the vertical lines for the minimum and maximum contour lengths. Default is '--'.
             **kwargs:
-                Keyword arguments. Handles in the following manner:
-                - dist_color (str): The color of the distribution line. Default is 'Blue'.
-                - fill_color (str): The color to fill the distribution. Default is 'LightBlue'.
-                - vertical_linestyle (str): The linestyle of the vertical lines for the minimum and maximum contour lengths.
-                  Default is '--'.
-                - Remaining keyword arguments are passed to the matplotlib.pyplot.plot function.
+                Keyword arguments to pass to matplotlib.pyplot.plot.
 
         Returns:
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object.
         '''
-
-        # Handle kwargs for plotting.
-        dist_color = kwargs.pop('dist_color', 'Blue')
-        fill_color = kwargs.pop('fill_color', 'LightBlue')
-        vertical_linestyle = kwargs.pop('vertical_linestyle', '--')
-
         # Create the ax object if it is not set.
         ax = ax or plt.gca()
 
@@ -969,6 +967,10 @@ class Polydat():
     def plot_mean_tantan_correlation(self,
                                      error_bars: bool = False,
                                      ax: plt.Axes = None,
+                                     color = 'Blue',
+                                     ecolor = 'LightBlue',
+                                     fmt = '.',
+                                     vertical_linestyle = '--',
                                      **kwargs) -> plt.Axes:
         '''
         Plot the Tan-Tan correlation for all particles.
@@ -978,24 +980,26 @@ class Polydat():
                 Whether or not to plot error bars. Default is False.
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object to plot the image on.
+            color (str):
+                The color of the mean correlation. Default is 'Blue'.
+            ecolor (str):
+                The color of the error bars. Default is 'LightBlue'.
+            fmt (str):
+                The format of the data points. Default is '.'.
+            vertical_linestyle (str):
+                The linestyle of the vertical lines for the minimum and maximum contour lengths. Default is '--'.
             **kwargs:
-                Todo.
+                Keyword arguments to pass to matplotlib.pyplot.errorbar.
         Returns:
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object.
         '''
-        # Handle Keyword Arguments for plotting.
-        color = kwargs.pop('color', 'Blue')
-        ecolor = kwargs.pop('ecolor', 'LightBlue')
-        fmt = kwargs.pop('fmt', '.')
-        vertical_linestyle = kwargs.pop('vertical_linestyle', '--')
-
         # Create the ax object if it is not set.
         ax = ax or plt.gca()
 
         # If the error bars are set, the error is the standard error of the mean. Otherwise, the error is 0.
         if error_bars:
-            error = self._tantan_sem
+            error = self._mean_tantan_sem
         else:
             error = np.zeros_like(self._mean_tantan_correlation)
 
