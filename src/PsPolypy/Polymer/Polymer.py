@@ -93,6 +93,9 @@ class Particle():
         # Set the interpolated skeleton derivatives attribute.
         self._interp_skeleton_derivatives = None
 
+        # Set the displacements attribute.
+        self._displacements = None
+
         # Set the Tan-Tan correlation attribute.
         self._tantan_correlations = None
 
@@ -215,6 +218,30 @@ class Particle():
             # Append the interpolated derivative for this path.
             self._interp_skeleton_derivatives.append(splev(contour_normalized, tck, der=1))
 
+    def calc_displacements(self) -> np.ndarray:
+        '''
+        Calculate the displacment along the contour for each path in the particle.
+
+        Args:
+            None
+        Returns:
+            None
+        '''
+        # Check to see if the interpolated skeleton coordinates are set. If not, raise a ValueError.
+        if self._interp_skeleton_coordinates is None:
+            raise ValueError('Interpolated skeleton coordinates attribute is not set. Interpolate the skeleton before calculating the persistence length.')
+        
+        # Initialize a list to store the displacements for each path.
+        displacements = []
+
+        # Loop over each path's interpolated skeleton coordinates.
+        for (splinex, spliney) in self._interp_skeleton_coordinates:
+            # Calculate the displacements for the current path.
+            displacements.append(np.sqrt((splinex - splinex[0])**2 + (spliney - spliney[0])**2))
+
+        # Set the displacements attribute.
+        self._displacements = displacements
+
     def calc_tantan_correlation(self) -> None:
         '''
         Calculate the tangent-tangent correlation for each path in the particle. 
@@ -229,7 +256,7 @@ class Particle():
             raise ValueError('Interpolated skeleton derivatives attribute is not set. Interpolate the skeleton before calculating the persistence length.')
 
         # Initialize a list to store Tan-Tan correlations for each path.
-        self._tantan_correlations = []
+        tantan_correlations = []
 
         # Loop over each path's interpolated skeleton derivative.
         for  derivative in self._interp_skeleton_derivatives:
@@ -250,7 +277,10 @@ class Particle():
                 corr[k] = np.mean(dot_products)
 
             # Append the correlation for this path to the list.
-            self._tantan_correlations.append(corr)
+            tantan_correlations.append(corr)
+
+        # Set the Tan-Tan correlation attribute.
+        self._tantan_correlations = tantan_correlations
 
     def plot_particle(self,
                       ax: plt.Axes = None,
@@ -414,6 +444,13 @@ class Particle():
         return self._interp_skeleton_derivatives
     
     @property
+    def displacements(self) -> list[np.ndarray]:
+        '''
+        The displacements of each path in the particle.
+        '''
+        return self._displacements
+    
+    @property
     def tantan_correlations(self) -> list[np.ndarray]:
         '''
         The Tan-Tan correlation of each path in the particle.
@@ -473,6 +510,9 @@ class Polydat():
         # Set the contour sampling attribute.
         self._contour_sampling = None
 
+        # Set the mean squared displacements attribute.
+        self._mean_squared_displacements = None
+
         # Set the mean Tan-Tan correlation attribute.
         self._mean_tantan_correlation = None
 
@@ -481,6 +521,12 @@ class Polydat():
 
         # Set the maximum contour length attribute.
         self._max_fitting_length = np.inf
+
+        # Set the wlc fit result attribute.
+        self._wlc_fit_result = None
+
+        # Set the tantan fit result attribute.
+        self._tantan_fit_result = None
 
     @classmethod
     def from_images(cls,
@@ -527,6 +573,21 @@ class Polydat():
                 The exponential decay value.
         '''
         return np.exp(-x/(2*lp))
+    
+    def __wormlike_chain_model(self, x, lp):
+        '''
+        Wormlike chain model for curve fitting.
+
+        Args:
+            x (float):
+                The x value.
+            lp (float):
+                The persistence length.
+        Returns:
+            float:
+                The wormlike chain value.
+        '''
+        return 2*2*lp*x * (1 - (2*lp/x) * (1 - np.exp(-x / (2*lp))))
     
     ########################
     ##### Main Methods #####
@@ -706,6 +767,57 @@ class Polydat():
             particle.interpolate_skeleton(step_size, k=k, s=s)
             self._contour_lengths.extend(particle.contour_lengths)
         self._contour_lengths = np.array(self._contour_lengths)
+    
+    def calc_displacements(self,
+                           included_classifications: list[str] = ['Linear', 'Branched', 'Loop', 'Branched-Looped']) -> None:
+        '''
+        Calculate the mean squared displacements for a set of particles. The displacements are calculated for each path in
+        each particle. The displacements are then squared and averaged over all particles. The standard deviation and standard
+        error of the mean are also calculated.
+
+        Optionally, the user can specify which classifications to include in the displacement calculation. By default, all
+        classifications are included.
+
+        Args:
+            included_classifications (list):
+                The list of classifications to include in the displacement calculation. 
+                Default is ['Linear', 'Branched', 'Loop', 'Branched-Looped'].
+        Returns:
+            None
+        '''
+        # Initialize the unnormalized contour length arryas and displacements array.
+        contour_samplings = []
+        displacements = []
+
+        # Filter the particles by the included classifications.
+        for classification in included_classifications:
+            particles = self.get_filtered_particles(classification)
+
+            # Calculate the displacements for each particle matching the classification.
+            for particle in particles:
+                particle.calc_displacements()
+                contour_samplings.extend(particle.contour_samplings)
+                displacements.extend(particle.displacements)
+
+        # Find the maximum size of the contour arrays.
+        max_size = max([len(contour) for contour in contour_samplings])
+        # Pad the contour and displacement arrays so each array is the same size.
+        padded_contours = np.array([
+            np.pad(contour, (0, max_size - len(contour)), 'constant', constant_values = np.nan) for contour in contour_samplings])
+        padded_displacements = np.array([
+            np.pad(displacement, (0, max_size - len(displacement)), 'constant', constant_values = np.nan) for displacement in displacements])
+        
+        # Get the contour array containing no nan values. This is the real space lag array.
+        self._contour_sampling = padded_contours[[~np.isnan(lengths).any() for lengths in padded_contours]][0]
+
+        # Calculate the mean squared displacements for each lag.
+        self._mean_squared_displacements = np.nanmean(padded_displacements**2, axis = 0)
+
+        # Calculate the standard deviation for error bars.
+        self._mean_squared_displacement_std = np.nanstd(padded_displacements**2, axis=0)
+        # Calculate the SEM (optional, preferred for error bars).
+        sample_count = np.sum(~np.isnan(padded_displacements), axis=0)
+        self._mean_squared_displacement_sem = self._mean_squared_displacement_std / np.sqrt(sample_count)
 
     def calc_tantan_correlations(self,
                                  included_classifications: list[str] = ['Linear', 'Branched', 'Loop', 'Branched-Looped']) -> None:
@@ -757,6 +869,58 @@ class Polydat():
         # Calculate the SEM (optional, preferred for error bars).
         sample_count = np.sum(~np.isnan(padded_correlations), axis=0)
         self._mean_tantan_sem = self._mean_tantan_std / np.sqrt(sample_count)
+
+    def calc_wlc_lp(self,
+                    lp_init = 10,
+                    min_fitting_length: float = 0,
+                    max_fitting_length: float = np.inf) -> None:
+        '''
+        Calculate the persistence length of the polymer particles using the wormlike chain model. The mean squared
+        displacements will only be fit between the minimum and maximum contour lengths. This method uses the lmfit package
+        for curve fitting.
+
+        The persistence length is calculated using the formula:
+        <R^2> = 2*s*Lp*l*(1 - s*Lp/l*(1 - exp(-l/(s*Lp))))
+        where l is the contour length of the skeleton, s is the equilibration constant (1.5 for unequilibrated, and 2 for
+        equilibrated), and Lp is the persistence length.
+
+        Args:
+            lp_init (float):
+                The initial guess for the persistence length. Default is 10.
+            min_fitting_length (float):
+                The minimum contour length to fit the exponential decay to. Default is 0.
+            max_fitting_length (float):
+                The maximum contour length to fit the exponential decay to. Default is np.inf.
+        Returns:
+            None
+        '''
+        # Get the mask for the xvalues between the minimum and maximum contour lengths.
+        inbetween_mask = (self._contour_sampling >= min_fitting_length) * (self._contour_sampling <= max_fitting_length)
+
+        # Set the minimum and maximum contour lengths attributes for usage in the plotting methods.
+        self._min_fitting_length = min_fitting_length
+        self._max_fitting_length = max_fitting_length
+
+        # Filter the xvals array to between the minimum and maximum contour lengths.
+        xvals = self._contour_sampling[inbetween_mask]
+
+        # Filter the mean_squared_displacements array to the same size as xvals.
+        yvals = self._mean_squared_displacements[inbetween_mask]
+
+        # Filter the mean_squared_displacement_sem array to the same size as xvals and invert it to get the weights.
+        weights = 1 / self._mean_squared_displacement_sem[inbetween_mask]
+
+        # Create a Model object
+        model = lmfit.Model(self.__wormlike_chain_model)
+
+        # Create a Parameters object
+        params = model.make_params(lp = lp_init)
+
+        # Fit the model to the data.
+        result = model.fit(yvals, params, x = xvals, weights = weights)
+
+        # Set the wlc_fit_result attribute.
+        self._wlc_fit_result = result
     
     def calc_tantan_lp(self,
                        lp_init = 10,
@@ -767,8 +931,9 @@ class Polydat():
         only be fit between the minimum and maximum contour lengths. This method uses the lmfit package for curve fitting.
 
         The persistence length is calculated using the formula:
-        <cos(theta)> = exp(-L/Lp)
-        where L is the contour length of the skeleton, and Lp is the persistence length.
+        <cos(theta)> = exp(-L/(s*Lp))
+        where L is the contour length of the skeleton, s is the equilibration constant (1.5 for unequilibrated, and 2 for
+        equilibrated), and Lp is the persistence length.
 
         Args:
             min_fitting_length (float):
@@ -999,6 +1164,131 @@ class Polydat():
         # Return the ax.
         return ax
     
+    def plot_mean_squared_displacements(self,
+                                        error_bars: bool = False,
+                                        ax: plt.Axes = None,
+                                        inc_kwargs: dict = None,
+                                        exc_kwargs: dict = None,
+                                        vline_kwargs: dict = None) -> plt.Axes:
+        '''
+        Plot the mean squared displacements for all particles.
+
+        Args:
+            error_bars (bool):
+                Whether or not to plot error bars. Default is False.
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object to plot the image on.
+            inc_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.errorbar for the included data points. (Between the minimum
+                and maximum contour lengths used for fitting) If the minimum and maximum contour lenths are 0 and np.inf,
+                these kwargs will be used for the entire dataset.
+                Default is None.
+            exc_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.errorbar for the excluded data points. (Outside the minimum
+                and maximum contour lengths used for fitting) 
+                Default is None.
+            vline_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.axvline for the vertical lines at the minimum and maximum
+                contour lengths.
+                Default is None.
+        Returns:
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object.
+        '''
+        # Create the ax object if it is not set.
+        ax = ax or plt.gca()
+
+        # Handle the default kwargs if they are none.
+        if inc_kwargs is None:
+            inc_kwargs = {}
+        if exc_kwargs is None:
+            exc_kwargs = {}
+        if vline_kwargs is None:
+            vline_kwargs = {}
+
+        # If the error bars are set, the error is the standard error of the mean. Otherwise, the error is 0.
+        if error_bars:
+            error = self._mean_squared_displacement_sem
+        else:
+            error = np.zeros_like(self._mean_squared_displacements)
+
+        # If the minimum and maximum contour lengths are set, only color the region between the minimum and maximum, plot
+        # the excluded regions in gray and plot vertical lines at the minimum and maximum contour lengths.
+        if self._min_fitting_length != 0 or self._max_fitting_length != np.inf:
+            
+            # Get the mask for the xvalues in between the min and max contour lengths
+            inbetween_mask = (self._contour_sampling >= self._min_fitting_length) * (self._contour_sampling <= self._max_fitting_length)
+
+            # Plot the mean Tan-Tan correlation between the minimum and maximum contour lengths with error bars.
+            ax.errorbar(self._contour_sampling[inbetween_mask],
+                        self._mean_squared_displacements[inbetween_mask],
+                        yerr = error[inbetween_mask],
+                        **inc_kwargs)
+            # Plot the mean Tan-Tan correlation outside the minimum and maximum contour lengths with error bars.
+            ax.errorbar(self._contour_sampling[~inbetween_mask],
+                        self._mean_squared_displacements[~inbetween_mask],
+                        yerr = error[~inbetween_mask],
+                        **exc_kwargs)
+            
+            # Draw the verical lines for the minimum and maximum contour lengths.
+            ax.axvline(self._min_fitting_length, **vline_kwargs)
+            ax.axvline(self._max_fitting_length, **vline_kwargs)
+
+        else:
+            # Plot the mean Tan-Tan correlation with error bars.
+            ax.errorbar(self._contour_sampling,
+                        self._mean_squared_displacements,
+                        yerr = error,
+                        **inc_kwargs)
+        
+        return ax
+    
+    def plot_mean_squared_displacements_fit(self,
+                                            ax: plt.Axes = None,
+                                            show_init: bool = False,
+                                            fit_kwargs: dict = None,
+                                            init_kwargs: dict = None) -> plt.Axes:
+        '''
+        Plot the fitted wormlike chain model of the mean squared displacements.
+
+        Args:
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object to plot the image on.
+            fit_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.plot for the fitted wormlike chain model.
+                Default is None.
+            init_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.plot for the initial guess of the wormlike chain model.
+                Only used if show_init is True.
+                Default is None.
+        Returns:
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object.
+        '''
+
+        # Create the ax object if it is not set.
+                # Create the ax object if it is not set.
+        ax = ax or plt.gca()
+
+        # Handle the default kwargs if they are none.
+        if fit_kwargs is None:
+            fit_kwargs = {}
+        if init_kwargs is None:
+            init_kwargs = {}
+
+        # Plot the fitted wlc model.
+        ax.plot(self._contour_sampling,
+                self.__wormlike_chain_model(self._contour_sampling, self._wlc_fit_result.params['lp'].value),
+                **fit_kwargs)
+        
+        # If show_init is true, also plot the initial guess.
+        if show_init:
+            ax.plot(self._contour_sampling,
+                    self.__wormlike_chain_model(self._contour_sampling, self._wlc_fit_result.params['lp'].init_value),
+                    **init_kwargs)
+        
+        return ax
+    
     def plot_mean_tantan_correlation(self,
                                      error_bars: bool = False,
                                      ax: plt.Axes = None,
@@ -1148,8 +1438,17 @@ class Polydat():
         print(f'Unknown Particles:\t\t\t{len(self.get_filtered_particles("Unknown"))}')
         print('-'*57)
         print('Persistence Length Stats:')
-        print(f'Tan-Tan Correlation lp:\t\t\t{self._tantan_fit_result.params["lp"].value * self._resolution:.1f} +/- {self._tantan_fit_result.params["lp"].stderr * self._resolution:.1f} nm')
-        print(f'Tan-Tan Correlation Reduced Chi^2:\t{self._tantan_fit_result.redchi:.2f}')
+        try:
+            print(f'Wormlike Chain lp:\t\t\t{self._wlc_fit_result.params["lp"].value * self._resolution:.1f} +/- {self._wlc_fit_result.params["lp"].stderr * self._resolution:.1f} nm')
+            print(f'Wormlike Chain Reduced Chi^2:\t\t{self._wlc_fit_result.redchi:.2f}')
+        except AttributeError:
+            pass
+        try:
+            print(f'Tan-Tan Correlation lp:\t\t\t{self._tantan_fit_result.params["lp"].value * self._resolution:.1f} +/- {self._tantan_fit_result.params["lp"].stderr * self._resolution:.1f} nm')
+            print(f'Tan-Tan Correlation Reduced Chi^2:\t{self._tantan_fit_result.redchi:.2f}')
+        except AttributeError:
+            pass
+        
         
     @property
     def images(self) -> list[np.ndarray]:
@@ -1202,12 +1501,27 @@ class Polydat():
         return self._contour_sampling
 
     @property
+    def mean_squared_displacements(self) -> np.ndarray:
+        '''
+        The mean squared displacements of all particles. Calculated by taking the mean of the squared displacements for each
+        path in each particle. 
+        '''
+        return self._mean_squared_displacements
+
+    @property
     def mean_tantan_correlation(self) -> np.ndarray:
         '''
         The mean Tan-Tan correlation of all particles. Calculated by taking the mean of the Tan-Tan correlation for each
         path in each particle. 
         '''
         return self._mean_tantan_correlation
+    
+    @property
+    def wlc_fit_result(self) -> lmfit.model.ModelResult:
+        '''
+        The lmfit model result of the wormlike chain fit.
+        '''
+        return self._wlc_fit_result
     
     @property
     def tantan_fit_result(self) -> lmfit.model.ModelResult:
