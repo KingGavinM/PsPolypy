@@ -873,7 +873,8 @@ class Polydat():
     def calc_wlc_lp(self,
                     lp_init = 10,
                     min_fitting_length: float = 0,
-                    max_fitting_length: float = np.inf) -> None:
+                    max_fitting_length: float = np.inf,
+                    scale_covar = True) -> None:
         '''
         Calculate the persistence length of the polymer particles using the wormlike chain model. The mean squared
         displacements will only be fit between the minimum and maximum contour lengths. This method uses the lmfit package
@@ -917,7 +918,7 @@ class Polydat():
         params = model.make_params(lp = lp_init)
 
         # Fit the model to the data.
-        result = model.fit(yvals, params, x = xvals, weights = weights)
+        result = model.fit(yvals, params, x = xvals, weights = weights, scale_covar = scale_covar)
 
         # Set the wlc_fit_result attribute.
         self._wlc_fit_result = result
@@ -925,7 +926,8 @@ class Polydat():
     def calc_tantan_lp(self,
                        lp_init = 10,
                        min_fitting_length: float = 0,
-                       max_fitting_length: float = np.inf) -> None:
+                       max_fitting_length: float = np.inf,
+                       scale_covar=True) -> None:
         '''
         Calculate the persistence length of the polymer particles using the Tan-Tan correlation method. The correlation will
         only be fit between the minimum and maximum contour lengths. This method uses the lmfit package for curve fitting.
@@ -966,7 +968,7 @@ class Polydat():
         params = model.make_params(lp = lp_init)
 
         # Fit the model to the data.
-        result = model.fit(yvals, params, x = xvals, weights = weights)
+        result = model.fit(yvals, params, x = xvals, weights = weights,scale_covar = scale_covar)
 
         # Set the tantan_fit_result attribute.
         self._tantan_fit_result = result
@@ -1113,15 +1115,15 @@ class Polydat():
 
         # Handle the default kwargs if they are none.
         if inc_dist_kwargs is None:
-            inc_dist_kwargs = {}
+            inc_dist_kwargs = {'color': 'Blue', 'lw': 2, 'label': 'Included data'}
         if inc_fill_kwargs is None:
-            inc_fill_kwargs = {}
+            inc_fill_kwargs = {'color': 'LightBlue', 'alpha': 0.5}
         if exc_dist_kwargs is None:
-            exc_dist_kwargs = {}
+            exc_dist_kwargs = {'color': 'Gray', 'lw': 2, 'alpha': 0.5, 'label': 'Excluded data'}
         if exc_fill_kwargs is None:
-            exc_fill_kwargs = {}
+            exc_fill_kwargs = {'color': 'LightGray', 'alpha': 0.5}
         if vline_kwargs is None:
-            vline_kwargs = {}
+            vline_kwargs = {'color': 'Blue', 'lw': 0.7, 'dashes': [8,3]}
 
         # Create a distribution of all the polymer branch lengths.
         xvals = np.linspace(0, self._contour_lengths.max(), n_points)
@@ -1200,11 +1202,11 @@ class Polydat():
 
         # Handle the default kwargs if they are none.
         if inc_kwargs is None:
-            inc_kwargs = {}
+            inc_kwargs = {'color': 'Blue', 'fmt': '.', 'ecolor': 'Blue', 'lw': 0.7, 'label': 'Fitted Data'}
         if exc_kwargs is None:
-            exc_kwargs = {}
+            exc_kwargs = {'color': 'Gray', 'fmt': '.', 'ecolor': 'Gray', 'lw': 0.7, 'label': 'Excluded Data'}
         if vline_kwargs is None:
-            vline_kwargs = {}
+            vline_kwargs = {'color': 'Blue', 'lw': 0.75, 'dashes': [8,3]}
 
         # If the error bars are set, the error is the standard error of the mean. Otherwise, the error is 0.
         if error_bars:
@@ -1246,8 +1248,12 @@ class Polydat():
     def plot_mean_squared_displacements_fit(self,
                                             ax: plt.Axes = None,
                                             show_init: bool = False,
+                                            show_ci: bool = False,
+                                            show_pd: bool = False,
                                             fit_kwargs: dict = None,
-                                            init_kwargs: dict = None) -> plt.Axes:
+                                            init_kwargs: dict = None,
+                                            ci_kwargs: dict = None,
+                                            pd_kwargs: dict = None) -> plt.Axes:
         '''
         Plot the fitted wormlike chain model of the mean squared displacements.
 
@@ -1272,21 +1278,35 @@ class Polydat():
 
         # Handle the default kwargs if they are none.
         if fit_kwargs is None:
-            fit_kwargs = {}
+            fit_kwargs = {'color': 'Red', 'lw': 1.5, 'label': 'Best Fit'}
         if init_kwargs is None:
-            init_kwargs = {}
+            init_kwargs = {'color': 'Red', 'lw': 0.75, 'linestyle': '--', 'label': 'Initial Guess'}
+        if ci_kwargs is None:
+            ci_kwargs = {'color': 'r', 'alpha': 0.4,'ec': 'r','label': '95% Confidence Interval'}
+        if pd_kwargs is None:
+            pd_kwargs = {'color': 'Gray', 'alpha': 0.3,'ec': 'k','label': '95% Prediction Band'}
 
         # Plot the fitted wlc model.
-        ax.plot(self._contour_sampling,
-                self.__wormlike_chain_model(self._contour_sampling, self._wlc_fit_result.params['lp'].value),
-                **fit_kwargs)
-        
+        x_ = self._contour_sampling
+        y_ = self.__wormlike_chain_model(self._contour_sampling, self._wlc_fit_result.params['lp'].value)
+        ax.plot(x_,y_,**fit_kwargs)
+
         # If show_init is true, also plot the initial guess.
         if show_init:
             ax.plot(self._contour_sampling,
                     self.__wormlike_chain_model(self._contour_sampling, self._wlc_fit_result.params['lp'].init_value),
                     **init_kwargs)
-        
+
+        dy_ci = self._wlc_fit_result.eval_uncertainty(x=x_,sigma=1.96)
+        # plot Confidence Interval
+        if show_ci:
+            ax.fill_between(x_,y_-dy_ci,y_+dy_ci,**ci_kwargs)
+        # plot prediction band    
+        if show_pd:
+            error = self._mean_squared_displacement_sem
+            dy_pd = np.sqrt(dy_ci**2+error**2)
+            ax.fill_between(x_,y_-dy_pd,y_+dy_pd,**pd_kwargs)
+
         return ax
     
     def plot_mean_tantan_correlation(self,
@@ -1325,11 +1345,11 @@ class Polydat():
 
         # Handle the default kwargs if they are none.
         if inc_kwargs is None:
-            inc_kwargs = {}
+            inc_kwargs = {'color': 'Blue', 'fmt': '.', 'ecolor': 'Blue', 'lw': 0.7, 'label': 'Fitted Data'}
         if exc_kwargs is None:
-            exc_kwargs = {}
+            exc_kwargs = {'color': 'Gray', 'fmt': '.', 'ecolor': 'Gray', 'lw': 0.7, 'label': 'Excluded Data'}
         if vline_kwargs is None:
-            vline_kwargs = {}
+            vline_kwargs = {'color': 'Blue', 'lw': 0.75, 'dashes': [8,3]}
 
         # If the error bars are set, the error is the standard error of the mean. Otherwise, the error is 0.
         if error_bars:
@@ -1344,6 +1364,7 @@ class Polydat():
             # Get the mask for the xvalues in between the min and max contour lengths
             inbetween_mask = (self._contour_sampling >= self._min_fitting_length) * (self._contour_sampling <= self._max_fitting_length)
 
+            
             # Plot the mean Tan-Tan correlation between the minimum and maximum contour lengths with error bars.
             ax.errorbar(self._contour_sampling[inbetween_mask],
                         self._mean_tantan_correlation[inbetween_mask],
@@ -1365,14 +1386,18 @@ class Polydat():
                         self._mean_tantan_correlation,
                         yerr = error,
                         **inc_kwargs)
-        
+            
         return ax
 
     def plot_mean_tantan_correlation_fit(self,
                                          ax: plt.Axes = None,
                                          show_init: bool = False,
+                                         show_ci: bool = False,
+                                         show_pd: bool = False,
                                          fit_kwargs: dict = None,
-                                         init_kwargs: dict = None) -> plt.Axes:
+                                         init_kwargs: dict = None,
+                                         ci_kwargs: dict = None,
+                                         pd_kwargs: dict = None) -> plt.Axes:
         '''
         Plot the fitted exponential decay of the mean Tan-Tan correlation.
 
@@ -1395,21 +1420,35 @@ class Polydat():
 
         # Handle the default kwargs if they are none.
         if fit_kwargs is None:
-            fit_kwargs = {}
+            fit_kwargs = {'color': 'Red', 'lw': 1.5, 'label': 'Best Fit'}
         if init_kwargs is None:
-            init_kwargs = {}
+            init_kwargs = {'color': 'Red', 'lw': 0.75, 'linestyle': '--', 'label': 'Initial Guess'}
+        if ci_kwargs is None:
+            ci_kwargs = {'color': 'r', 'alpha': 0.4,'ec': 'r','label': '95% Confidence Interval'}
+        if pd_kwargs is None:
+            pd_kwargs = {'color': 'Gray', 'alpha': 0.3,'ec': 'k','label': '95% Prediction Band'}
 
         # Plot the fitted exponential model.
-        ax.plot(self._contour_sampling,
-                self.__exponential_model(self._contour_sampling, self._tantan_fit_result.params['lp'].value),
-                **fit_kwargs)
+        x_ = self._contour_sampling
+        y_ = self.__exponential_model(self._contour_sampling, self._tantan_fit_result.params['lp'].value)
+        ax.plot(x_,y_,**fit_kwargs)
         
         # If show_init is true, also plot the initial guess.
         if show_init:
-            ax.plot(self._contour_sampling,
+            ax.plot(self.x_,
                     self.__exponential_model(self._contour_sampling, self._tantan_fit_result.params['lp'].init_value),
                     **init_kwargs)
-        
+
+        dy_ci = self._tantan_fit_result.eval_uncertainty(x=x_,sigma=1.96)
+        # plot Confidence Interval
+        if show_ci:
+            ax.fill_between(x_,y_-dy_ci,y_+dy_ci,**ci_kwargs)
+        # plot prediction band    
+        if show_pd:
+            error = self._mean_tantan_sem
+            dy_pd = np.sqrt(dy_ci**2+error**2)
+            ax.fill_between(x_,y_-dy_pd,y_+dy_pd,**pd_kwargs)
+
         return ax
 
     def print_summary(self) -> None:
