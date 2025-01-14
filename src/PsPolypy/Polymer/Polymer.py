@@ -1,4 +1,5 @@
 from typing import Any, Tuple, Dict
+import copy
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -6,7 +7,6 @@ from PIL import Image
 
 from scipy.interpolate import splprep, splev
 from scipy.stats import gaussian_kde
-from scipy.optimize import curve_fit
 
 from skimage.transform import resize
 from skimage.filters import threshold_otsu
@@ -111,7 +111,7 @@ class Particle():
         Returns:
             None
         '''
-        skel = skeletonize(self._binary_mask, method = method)
+        skel = skeletonize(self._binary_mask, method = method)            
         self._skeleton = skan.Skeleton(skel, source_image = self._image)
         self._skeleton_summary = skan.summarize(self._skeleton, separator = '_')
 
@@ -490,19 +490,24 @@ class Polydat():
             None
         '''
         #Set the image attribute.
-        self._images = images if images is not None else []
+        self._images = copy.deepcopy(images) if images is not None else []
+
+        # Set the metadata attribute.
+        self._metadata = copy.deepcopy(metadata) if metadata is not None else {}
 
         # Set the resolution attribute.
         self._resolution = resolution
-
-        # Set the metadata attribute.
-        self._metadata = metadata
+        # Set the base resolution metadata.
+        self._metadata['base_resolution'] = resolution
 
         # Set the particles attribute.
         self._particles = []
 
         # Set the number of particles attribute.
-        self._num_particles = 0
+        self._num_particles = {'All': 0, 'Linear': 0, 'Branched': 0, 'Loop': 0, 'Branched-Looped': 0, 'Unknown': 0}
+
+        # Set the included_classifications attribute.
+        self._included_classifications = ['Linear', 'Branched', 'Loop', 'Branched-Looped', 'Unknown']
 
         # Set the contour lengths attribute.
         self._contour_lengths = None
@@ -522,8 +527,8 @@ class Polydat():
         # Set the maximum contour length attribute.
         self._max_fitting_length = np.inf
 
-        # Set the wlc fit result attribute.
-        self._wlc_fit_result = None
+        # Set the R2 fit result attribute.
+        self._R2_fit_result = None
 
         # Set the tantan fit result attribute.
         self._tantan_fit_result = None
@@ -570,13 +575,13 @@ class Polydat():
                 The persistence length.
         Returns:
             float:
-                The exponential decay value.
+                The exponential decay model value.
         '''
         return np.exp(-x/(2*lp))
     
-    def __wormlike_chain_model(self, x, lp):
+    def __R2_model(self, x, lp):
         '''
-        Wormlike chain model for curve fitting.
+        End to end distance sqaured model for curve fitting.
 
         Args:
             x (float):
@@ -585,9 +590,9 @@ class Polydat():
                 The persistence length.
         Returns:
             float:
-                The wormlike chain value.
+                The R^2 model value.
         '''
-        return 2*2*lp*x * (1 - (2*lp/x) * (1 - np.exp(-x / (2*lp))))
+        return 2*2*lp*x * (1 - (2*lp/(x + 1e-10)) * (1 - np.exp(-x / (2*lp))))
     
     ########################
     ##### Main Methods #####
@@ -635,7 +640,7 @@ class Polydat():
         if self._metadata.get('upscaled', False):
             raise ValueError('Images have already been upscaled. Interpolating further may have unexpected results.')
         
-        for index, image in enumerate(self._images):
+        for index, image in enumerate(self._images[:]):
             # Calculate the new resolution.
             new_resolution = self._resolution/magnification
 
@@ -650,6 +655,8 @@ class Polydat():
         # Update the metadata so the user knows the image has been upscaled.
         self._metadata['upscaled'] = True
         self._metadata['magnification'] = magnification
+        self._metadata['interpolation_order'] = order
+        self._metadata['upscaled_resolution'] = new_resolution
 
     def segment_particles(self,
                           minimum_area = 10,
@@ -668,11 +675,8 @@ class Polydat():
         Returns:
             None
         '''
-        # Create the particles list.
+        self._num_particles['All'] = 0
         self._particles = []
-        # Set the number of particles attribute.
-        self._num_particles = 0
-
         for image in self._images:
             # Apply the otsu threshold, and create the binary mask.
             threshold = threshold_otsu(image)
@@ -704,18 +708,22 @@ class Polydat():
                 # Get the binary mask of the particle.
                 particle_mask = labeled[bbox[0]:bbox[2], bbox[1]:bbox[3]] == region.label
 
+                # Skipping particles with fewer than 3 pixels in the binary mask.
+                if np.sum(particle_mask) < 3:
+                    continue
+
                 # Create the Particle object.
                 particle = Particle(image = particle_image,
                                     resolution = self._resolution,
                                     bbox = bbox,
                                     binary_mask = particle_mask,
-                                    id = self._num_particles)
+                                    id = region.label-1)
             
                 # Append the Particle object to the particles list.
                 self._particles.append(particle)
                 
                 # Increment the number of particles attribute.
-                self._num_particles += 1
+                self._num_particles['All'] += 1
 
     def skeletonize_particles(self, method = 'zhang') -> None:
         '''
@@ -728,8 +736,13 @@ class Polydat():
         Returns:
             None
         '''
-        for particle in self._particles:
-            particle.skeletonize_particle(method = method)
+        for particle in self._particles[:]:
+            try:
+                # Attempt to skeletonize the particle.
+                particle.skeletonize_particle(method = method)
+            except ValueError:
+                # If the skeletonization fails, remove the particle from the list.
+                self._particles.remove(particle)
 
     def classify_particles(self) -> None:
         '''
@@ -742,6 +755,29 @@ class Polydat():
         '''
         for particle in self._particles:
             particle.classify()
+            self._num_particles[particle.classification] = self._num_particles.get(particle.classification, 0) + 1
+
+    def filter_particles(self,
+                         classifications: list[str]) -> None:
+        '''
+        Remove particles from the particles attribute that do not match the given classifications.
+
+        Args:
+            classifications (list):
+                The list of classifications to include in the filtering.
+        Returns:
+            None
+        '''
+        # Check to see if the classifications are valid.
+        for classification in classifications:
+            if classification not in ['Linear', 'Branched', 'Loop', 'Branched-Looped', 'Unknown']:
+                raise ValueError(f'Invalid classification: {classification}. Valid classifications are Linear, Branched, Loop, Branched-Looped, and Unknown.')
+
+        # Set the particles attribute to only include particles with the given classifications.
+        self._particles = [particle for particle in self._particles if particle.classification in classifications]
+
+        # Update the included classifications attribute.
+        self._included_classifications = classifications
 
     def interpolate_skeletons(self,
                               step_size: float,
@@ -768,20 +804,14 @@ class Polydat():
             self._contour_lengths.extend(particle.contour_lengths)
         self._contour_lengths = np.array(self._contour_lengths)
     
-    def calc_displacements(self,
-                           included_classifications: list[str] = ['Linear', 'Branched', 'Loop', 'Branched-Looped']) -> None:
+    def calc_displacements(self) -> None:
         '''
         Calculate the mean squared displacements for a set of particles. The displacements are calculated for each path in
         each particle. The displacements are then squared and averaged over all particles. The standard deviation and standard
         error of the mean are also calculated.
 
-        Optionally, the user can specify which classifications to include in the displacement calculation. By default, all
-        classifications are included.
-
         Args:
-            included_classifications (list):
-                The list of classifications to include in the displacement calculation. 
-                Default is ['Linear', 'Branched', 'Loop', 'Branched-Looped'].
+            None
         Returns:
             None
         '''
@@ -789,15 +819,11 @@ class Polydat():
         contour_samplings = []
         displacements = []
 
-        # Filter the particles by the included classifications.
-        for classification in included_classifications:
-            particles = self.get_filtered_particles(classification)
-
-            # Calculate the displacements for each particle matching the classification.
-            for particle in particles:
-                particle.calc_displacements()
-                contour_samplings.extend(particle.contour_samplings)
-                displacements.extend(particle.displacements)
+        # Calculate the displacements for each particle matching the classification.
+        for particle in self._particles:
+            particle.calc_displacements()
+            contour_samplings.extend(particle.contour_samplings)
+            displacements.extend(particle.displacements)
 
         # Find the maximum size of the contour arrays.
         max_size = max([len(contour) for contour in contour_samplings])
@@ -819,20 +845,14 @@ class Polydat():
         sample_count = np.sum(~np.isnan(padded_displacements), axis=0)
         self._mean_squared_displacement_sem = self._mean_squared_displacement_std / np.sqrt(sample_count)
 
-    def calc_tantan_correlations(self,
-                                 included_classifications: list[str] = ['Linear', 'Branched', 'Loop', 'Branched-Looped']) -> None:
+    def calc_tantan_correlations(self) -> None:
         '''
         Calculate the Tan-Tan correlation a set of particles. The correlation is calculated for each
         path in each particle. The correlation is then averaged over all particles and the absolute value is taken. The
         standard deviation and standard error of the mean are also calculated.
 
-        Optionally, the user can specify which classifications to include in the correlation calculation. By default, all
-        classifications are included.
-
         Args:
-            included_classifications (list):
-                The list of classifications to include in the correlation calculation. 
-                Default is ['Linear', 'Branched', 'Loop', 'Branched-Looped'].
+            None
         Returns:
             None
         '''
@@ -840,15 +860,11 @@ class Polydat():
         contour_samplings = []
         tantan_correlations = []
 
-        # Filter the particles by the included classifications.
-        for classification in included_classifications:
-            particles = self.get_filtered_particles(classification)
-
-            # Calculate the Tan-Tan correlation for each particle matching the classification.
-            for particle in particles:
-                particle.calc_tantan_correlation()
-                contour_samplings.extend(particle.contour_samplings)
-                tantan_correlations.extend(particle.tantan_correlations)
+        # Calculate the Tan-Tan correlation for each particle matching the classification.
+        for particle in self.particles:
+            particle.calc_tantan_correlation()
+            contour_samplings.extend(particle.contour_samplings)
+            tantan_correlations.extend(particle.tantan_correlations)
 
         # Find the maximum size of the contour arrays.
         max_size = max([len(contour) for contour in contour_samplings])
@@ -870,15 +886,15 @@ class Polydat():
         sample_count = np.sum(~np.isnan(padded_correlations), axis=0)
         self._mean_tantan_sem = self._mean_tantan_std / np.sqrt(sample_count)
 
-    def calc_wlc_lp(self,
+    def calc_R2_lp(self,
                     lp_init = 10,
                     min_fitting_length: float = 0,
                     max_fitting_length: float = np.inf,
-                    scale_covar = True) -> None:
+                    fit_kwargs: dict = None) -> None:
         '''
-        Calculate the persistence length of the polymer particles using the wormlike chain model. The mean squared
-        displacements will only be fit between the minimum and maximum contour lengths. This method uses the lmfit package
-        for curve fitting.
+        Calculate the persistence length of the polymer particles using the end to end distance squared model. The mean
+        squared displacements will only be fit between the minimum and maximum contour lengths. This method uses the lmfit
+        package for curve fitting.
 
         The persistence length is calculated using the formula:
         <R^2> = 2*s*Lp*l*(1 - s*Lp/l*(1 - exp(-l/(s*Lp))))
@@ -892,9 +908,15 @@ class Polydat():
                 The minimum contour length to fit the exponential decay to. Default is 0.
             max_fitting_length (float):
                 The maximum contour length to fit the exponential decay to. Default is np.inf.
+            fit_kwargs (dict):
+                Keyword arguments to pass to the lmfit Model.fit() method. Default is None.
         Returns:
             None
         '''
+        # Handle the default kwargs if they are None.
+        if fit_kwargs is None:
+            fit_kwargs = {'scale_covar': True}
+
         # Get the mask for the xvalues between the minimum and maximum contour lengths.
         inbetween_mask = (self._contour_sampling >= min_fitting_length) * (self._contour_sampling <= max_fitting_length)
 
@@ -912,22 +934,22 @@ class Polydat():
         weights = 1 / self._mean_squared_displacement_sem[inbetween_mask]
 
         # Create a Model object
-        model = lmfit.Model(self.__wormlike_chain_model)
+        model = lmfit.Model(self.__R2_model)
 
         # Create a Parameters object
         params = model.make_params(lp = lp_init)
 
         # Fit the model to the data.
-        result = model.fit(yvals, params, x = xvals, weights = weights, scale_covar = scale_covar)
+        result = model.fit(yvals, params, x = xvals, weights = weights, **fit_kwargs)
 
-        # Set the wlc_fit_result attribute.
-        self._wlc_fit_result = result
+        # Set the R2_fit_result attribute.
+        self._R2_fit_result = result
     
     def calc_tantan_lp(self,
                        lp_init = 10,
                        min_fitting_length: float = 0,
                        max_fitting_length: float = np.inf,
-                       scale_covar=True) -> None:
+                       fit_kwargs: dict = None) -> None:
         '''
         Calculate the persistence length of the polymer particles using the Tan-Tan correlation method. The correlation will
         only be fit between the minimum and maximum contour lengths. This method uses the lmfit package for curve fitting.
@@ -938,13 +960,21 @@ class Polydat():
         equilibrated), and Lp is the persistence length.
 
         Args:
+            lp_init (float):
+                The initial guess for the persistence length. Default is 10.
             min_fitting_length (float):
                 The minimum contour length to fit the exponential decay to. Default is 0.
             max_fitting_length (float):
                 The maximum contour length to fit the exponential decay to. Default is np.inf.
+            fit_kwargs (dict):
+                Keyword arguments to pass to the lmfit Model.fit() method. Default is None.
         Returns:
             None
         '''
+        # Handle the default kwargs if they are None.
+        if fit_kwargs is None:
+            fit_kwargs = {'scale_covar': True}
+
         # Get the mask for the xvalues between the minimum and maximum contour lengths.
         inbetween_mask = (self._contour_sampling >= min_fitting_length) * (self._contour_sampling <= max_fitting_length)
 
@@ -968,25 +998,10 @@ class Polydat():
         params = model.make_params(lp = lp_init)
 
         # Fit the model to the data.
-        result = model.fit(yvals, params, x = xvals, weights = weights,scale_covar = scale_covar)
+        result = model.fit(yvals, params, x = xvals, weights = weights, **fit_kwargs)
 
         # Set the tantan_fit_result attribute.
         self._tantan_fit_result = result
-
-    def get_filtered_particles(self,
-                               filter_str: str) -> list:
-        '''
-        Returns a list of particles that match a classification string. 
-
-        Args:
-            filter_str (str):
-                The classification string to filter the particles by. Options are 'Linear', 'Branched', 'Loop', and
-                'Unknown'. Note: The classification strings are case sensitive.
-        Returns:
-            list:
-                List of Particle objects that match the classification string.
-        '''
-        return [particle for particle in self._particles if particle.classification == filter_str]
 
     def plot_image(self,
                    index: int = 0,
@@ -1255,17 +1270,31 @@ class Polydat():
                                             ci_kwargs: dict = None,
                                             pd_kwargs: dict = None) -> plt.Axes:
         '''
-        Plot the fitted wormlike chain model of the mean squared displacements.
+        Plot the fitted R2 model of the mean squared displacements.
 
         Args:
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object to plot the image on.
+            show_init (bool):
+                Whether or not to show the initial guess of the R2 model. Default is False.
+            show_ci (bool):
+                Whether or not to show the 95% confidence interval of the R2 model. Default is False.
+            show_pd (bool):
+                Whether or not to show the 95% prediction band of the R2 model. Default is False.
             fit_kwargs (dict):
-                Keyword arguments to pass to matplotlib.pyplot.plot for the fitted wormlike chain model.
+                Keyword arguments to pass to matplotlib.pyplot.plot for the fitted R2 model.
                 Default is None.
             init_kwargs (dict):
-                Keyword arguments to pass to matplotlib.pyplot.plot for the initial guess of the wormlike chain model.
+                Keyword arguments to pass to matplotlib.pyplot.plot for the initial guess of the R2 model.
                 Only used if show_init is True.
+                Default is None.
+            ci_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.fill_between for the 95% confidence interval of the R2 model.
+                Only used if show_ci is True.
+                Default is None.
+            pd_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.fill_between for the 95% prediction band of the R2 model.
+                Only used if show_pd is True.
                 Default is None.
         Returns:
             ax (matplotlib.axes.Axes):
@@ -1286,20 +1315,20 @@ class Polydat():
         if pd_kwargs is None:
             pd_kwargs = {'color': 'Gray', 'alpha': 0.3,'ec': 'k','label': '95% Prediction Band'}
 
-        # Plot the fitted wlc model.
+        # Plot the fitted R2 model.
         x_ = self._contour_sampling
-        y_ = self.__wormlike_chain_model(self._contour_sampling, self._wlc_fit_result.params['lp'].value)
+        y_ = self.__R2_model(self._contour_sampling, self._R2_fit_result.params['lp'].value)
         ax.plot(x_,y_,**fit_kwargs)
 
         # If show_init is true, also plot the initial guess.
         if show_init:
             ax.plot(self._contour_sampling,
-                    self.__wormlike_chain_model(self._contour_sampling, self._wlc_fit_result.params['lp'].init_value),
+                    self.__R2_model(self._contour_sampling, self._R2_fit_result.params['lp'].init_value),
                     **init_kwargs)
-
-        dy_ci = self._wlc_fit_result.eval_uncertainty(x=x_,sigma=1.96)
+        
         # plot Confidence Interval
         if show_ci:
+            dy_ci = self._R2_fit_result.eval_uncertainty(x=x_,sigma=1.96)
             ax.fill_between(x_,y_-dy_ci,y_+dy_ci,**ci_kwargs)
         # plot prediction band    
         if show_pd:
@@ -1435,7 +1464,7 @@ class Polydat():
         
         # If show_init is true, also plot the initial guess.
         if show_init:
-            ax.plot(self.x_,
+            ax.plot(x_,
                     self.__exponential_model(self._contour_sampling, self._tantan_fit_result.params['lp'].init_value),
                     **init_kwargs)
 
@@ -1450,6 +1479,68 @@ class Polydat():
             ax.fill_between(x_,y_-dy_pd,y_+dy_pd,**pd_kwargs)
 
         return ax
+    
+    def print_image_summary(self) -> None:
+        '''
+        Print a summary of the polymer image data.
+        
+        Args:
+            None
+        Returns:
+            None
+        '''
+        print('Image Summary:')
+        print(f'Number of Images:\t\t\t{len(self._images)}')
+        print(f'Base Resolution:\t\t\t{self._metadata.get("base_resolution", 0):.1f} nm/pixel')
+        if self._metadata.get('upscaled', False):
+            print(f'Upscaled:\t\t\t\t{self._metadata.get("upscaled", False)}')
+            print(f'Magnification Factor:\t\t\t{self._metadata.get("magnification", 0):.1f}')
+            print(f'Interploation Order:\t\t\t{self._metadata.get('interpolation_order', 0)}')
+            print(f'Upscaled Resolution:\t\t\t{self._resolution:.1f} nm/pixel')
+    
+    def print_classification_summary(self) -> None:
+        '''
+        Print a summary of the segmentation and classification for the polymer data.
+
+        Args:
+            None
+        Returns:
+            None
+        '''
+        print('Segmentation/Classification Summary:')
+        print(f'All Particles:\t\t\t\t{self._num_particles.get("All", 0)}')
+        print(f'Linear Particles:\t\t\t{self._num_particles.get("Linear", 0)}{'\t(Filtered Out)' if 'Linear' not in self._included_classifications else ''}')
+        print(f'Branched Particles:\t\t\t{self._num_particles.get("Branched", 0)}{'\t(Filtered Out)' if 'Branched' not in self._included_classifications else ''}')
+        print(f'Branched-Looped Particles:\t\t{self._num_particles.get("Branched-Looped", 0)}{'\t(Filtered Out)' if 'Branched-Looped' not in self._included_classifications else ''}')
+        print(f'Looped Particles:\t\t\t{self._num_particles.get("Loop", 0)}{'\t(Filtered Out)' if 'Loop' not in self._included_classifications else ''}')
+        print(f'Unknown Particles:\t\t\t{self._num_particles.get("Unknown", 0)}{'\t(Filtered Out)' if 'Unknown' not in self._included_classifications else ''}')
+
+    def print_pl_summary(self) -> None:
+        '''
+        Print a summary of the persistence length calculations.
+
+        Args:
+            None
+        Returns:
+            None
+        '''
+        print('Persistence Length Summary:')
+        if self._included_classifications == ['Linear', 'Branched', 'Loop', 'Branched-Looped', 'Unknown']:
+            print('Included Classifications:\t\tAll')
+        else:
+            print(f'Included Classifications:\t\t{self._included_classifications}')
+        print(f'Minimum Fitting Contour Length:\t\t{self._min_fitting_length:.1f} nm')
+        print(f'Maximum Fitting Contour Length:\t\t{self._max_fitting_length:.1f} nm')
+        try:
+            print(f'R^2 lp:\t\t\t\t\t{self._R2_fit_result.params["lp"].value * self._resolution:.1f} +/- {self._R2_fit_result.params["lp"].stderr * self._resolution:.1f} nm')
+            print(f'R^2 Reduced Chi^2:\t\t\t{self._R2_fit_result.redchi:.2f}')
+        except AttributeError:
+            pass
+        try:
+            print(f'Tan-Tan Correlation lp:\t\t\t{self._tantan_fit_result.params["lp"].value * self._resolution:.1f} +/- {self._tantan_fit_result.params["lp"].stderr * self._resolution:.1f} nm')
+            print(f'Tan-Tan Correlation Reduced Chi^2:\t{self._tantan_fit_result.redchi:.2f}')
+        except AttributeError:
+            pass
 
     def print_summary(self) -> None:
         '''
@@ -1460,34 +1551,13 @@ class Polydat():
         Returns:
             None
         '''
-
         print('Polymer Data Summary')
-        print('-'*57)
-        print('Image Stats:')
-        print(f'Number of Images:\t\t\t{len(self._images)}')
-        print(f'Interpolated:\t\t\t\t{self._metadata.get("upscaled", False)}')
-        print(f'Resolution:\t\t\t\t{self._resolution:.1f} nm/pixel')
-        print('-'*57)
-        print('Particle Stats:')
-        print(f'Number of Particles:\t\t\t{self._num_particles}')
-        print(f'Linear Particles:\t\t\t{len(self.get_filtered_particles("Linear"))}')
-        print(f'Branched Particles:\t\t\t{len(self.get_filtered_particles("Branched"))}')
-        print(f'Branched-Looped Particles:\t\t{len(self.get_filtered_particles("Branched-Looped"))}')
-        print(f'Looped Particles:\t\t\t{len(self.get_filtered_particles("Looped"))}')
-        print(f'Unknown Particles:\t\t\t{len(self.get_filtered_particles("Unknown"))}')
-        print('-'*57)
-        print('Persistence Length Stats:')
-        try:
-            print(f'Wormlike Chain lp:\t\t\t{self._wlc_fit_result.params["lp"].value * self._resolution:.1f} +/- {self._wlc_fit_result.params["lp"].stderr * self._resolution:.1f} nm')
-            print(f'Wormlike Chain Reduced Chi^2:\t\t{self._wlc_fit_result.redchi:.2f}')
-        except AttributeError:
-            pass
-        try:
-            print(f'Tan-Tan Correlation lp:\t\t\t{self._tantan_fit_result.params["lp"].value * self._resolution:.1f} +/- {self._tantan_fit_result.params["lp"].stderr * self._resolution:.1f} nm')
-            print(f'Tan-Tan Correlation Reduced Chi^2:\t{self._tantan_fit_result.redchi:.2f}')
-        except AttributeError:
-            pass
-        
+        print('-'*64)
+        self.print_image_summary()
+        print('-'*64)
+        self.print_classification_summary()
+        print('-'*64)
+        self.print_pl_summary()
         
     @property
     def images(self) -> list[np.ndarray]:
@@ -1518,9 +1588,9 @@ class Polydat():
         return self._metadata
     
     @property
-    def num_particles(self) -> int:
+    def num_particles(self) -> Dict[str, int]:
         '''
-        The number of particles in the particles attribute.
+        Dictionary of the number of particles for each classification.
         '''
         return self._num_particles
 
@@ -1556,11 +1626,11 @@ class Polydat():
         return self._mean_tantan_correlation
     
     @property
-    def wlc_fit_result(self) -> lmfit.model.ModelResult:
+    def R2_fit_result(self) -> lmfit.model.ModelResult:
         '''
-        The lmfit model result of the wormlike chain fit.
+        The lmfit model result of the end to end distance squared fit.
         '''
-        return self._wlc_fit_result
+        return self._R2_fit_result
     
     @property
     def tantan_fit_result(self) -> lmfit.model.ModelResult:
