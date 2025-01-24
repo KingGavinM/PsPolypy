@@ -1,3 +1,4 @@
+from collections import defaultdict
 from typing import Any, Tuple, Dict
 import copy
 
@@ -103,7 +104,7 @@ class Particle():
         self._tantan_correlations = None
 
     def skeletonize_particle(self,
-                             method: str = 'zhang') -> None:
+                             method: str = 'zhang') -> Tuple[skan.Skeleton, 'pandas.DataFrame']: # type: ignore
         '''
         Skeletonize the particle's binary mask and set the skeleton attribute.
 
@@ -114,18 +115,32 @@ class Particle():
         Returns:
             None
         '''
-        skel = skeletonize(self._binary_mask, method = method)            
-        self._skeleton = skan.Skeleton(skel, source_image = self._image)
-        self._skeleton_summary = skan.summarize(self._skeleton, separator = '_')
+        # Skeletonize the binary mask with skimage.
+        skeletonized = skeletonize(self._binary_mask, method = method)   
 
-    def classify(self) -> None:
+        # Create the skan skeleton object.
+        skan_skeleton = skan.Skeleton(skeletonized, source_image = self._image)
+
+        # Set the skeleton attribute.
+        self._skeleton = skan_skeleton
+
+        # Create the skeleton summary.
+        skeleton_summary = skan.summarize(skan_skeleton, separator = '_')
+        # Set the skeleton summary attribute.
+        self._skeleton_summary = skeleton_summary
+
+        # Return the skan skeleton ans skeleton summary.
+        return skan_skeleton, skeleton_summary
+
+    def classify(self) -> str:
         '''
         Classify the particle as Linear, Branched, Loop, Branched-Loop, or Unknown based on the skeleton summary.
         
         Args:
             None
         Returns:
-            None
+            classification (str):
+                The classification of the particle.
         '''
         # Check to see if the skeleton summary is set. If not, raise a ValueError.
         if self._skeleton_summary is None:
@@ -136,7 +151,7 @@ class Particle():
 
         # Check if the particle is classified as linear:
         if np.all(unique_branch_types == 0):
-            self._classification = 'Linear'
+            classification = 'Linear'
 
         # Check if the particle is classified as branched-loop:
         elif 1 in unique_branch_types:
@@ -146,22 +161,28 @@ class Particle():
             
             # If any loops are found, classify the particle as branched-loop.
             if len(loops) > 0:
-                self._classification = 'Branched-Looped'
+                classification = 'Branched-Looped'
             else:
-                self._classification = 'Branched'
+                classification = 'Branched'
 
         # Check if the particle is classified as a loop:
         elif np.all(unique_branch_types == 3):
-            self._classification = 'Looped'
+            classification = 'Looped'
 
         # If the particle does not fit any of the above classifications, set the classification to unknown.
         else:
-            self._classification = 'Unknown'
+            classification = 'Unknown'
+
+        # Set the classification attribute.
+        self._classification = classification
+
+        # Return the classification.
+        return classification
 
     def interpolate_skeleton(self,
                              step_size: float,
                              k: int = 3,
-                             s: float = 0.5) -> None:
+                             s: float = 0.5) -> Tuple[list[np.ndarray], list[float], list[np.ndarray], list[np.ndarray]]:
         '''
         Create an interpolated representation of the skeleton for all paths. This is necessary for calculating the persistence 
         length with subpixel accuracy. Each path is interpolated using a spline of order k with a smoothing factor s.
@@ -174,17 +195,19 @@ class Particle():
             s (float):
                 The smoothing factor. Default is 0.5.
         Returns:
-            None
+            contour_samplings, contour_lengths, interp_skeleton_coordinates, interp_skeleton_derivatives (Tuple):
+                Tuple containing the contour samplings, contour lengths, interpolated skeleton coordinates, and interpolated
+                skeleton derivatives for each path in the particle.
         '''
         # Check to see if the skeleton is set. If not, raise a ValueError.
         if self._skeleton is None:
             raise ValueError('Skeleton attribute is not set. Skeletonize the particle before interpolating.')
 
         # Initialize lists to store interpolated values for each path.
-        self._contour_samplings = []
-        self._contour_lengths = []
-        self._interp_skeleton_coordinates = []
-        self._interp_skeleton_derivatives = []
+        contour_samplings = []
+        contour_lengths = []
+        interp_skeleton_coordinates = []
+        interp_skeleton_derivatives = []
 
         # Loop over all paths in the skeleton.
         num_paths = self._skeleton.n_paths
@@ -204,7 +227,7 @@ class Particle():
                 continue
 
             # Append the contour length for this path.
-            self._contour_lengths.append(contour_length)
+            contour_lengths.append(contour_length)
 
             # Set the actual contour coordinates for this path.
             contour_actual = np.arange(0, contour_length, step_size)
@@ -213,22 +236,32 @@ class Particle():
             contour_normalized = contour_actual / contour_length
 
             # Append the true contour sampling for this path.
-            self._contour_samplings.append(contour_actual)
+            contour_samplings.append(contour_actual)
 
             # Append the interpolated skeleton coordinates for this path.
-            self._interp_skeleton_coordinates.append(splev(contour_normalized, tck))
+            interp_skeleton_coordinates.append(splev(contour_normalized, tck))
 
             # Append the interpolated derivative for this path.
-            self._interp_skeleton_derivatives.append(splev(contour_normalized, tck, der=1))
+            interp_skeleton_derivatives.append(splev(contour_normalized, tck, der=1))
 
-    def calc_displacements(self) -> np.ndarray:
+        # Set the attributes
+        self._contour_samplings = contour_samplings
+        self._contour_lengths = contour_lengths
+        self._interp_skeleton_coordinates = interp_skeleton_coordinates
+        self._interp_skeleton_derivatives = interp_skeleton_derivatives
+        
+        # Return the interpolated values.
+        return contour_samplings, contour_lengths, interp_skeleton_coordinates, interp_skeleton_derivatives
+
+    def calc_displacements(self) -> list[np.ndarray]:
         '''
         Calculate the displacment along the contour for each path in the particle.
 
         Args:
             None
         Returns:
-            None
+            (list):
+                List of displacements for each path in the particle.
         '''
         # Check to see if the interpolated skeleton coordinates are set. If not, raise a ValueError.
         if self._interp_skeleton_coordinates is None:
@@ -245,14 +278,18 @@ class Particle():
         # Set the displacements attribute.
         self._displacements = displacements
 
-    def calc_tantan_correlation(self) -> None:
+        # Return the displacements.
+        return displacements
+
+    def calc_tantan_correlation(self) -> list[np.ndarray]:
         '''
-        Calculate the tangent-tangent correlation for each path in the particle. 
+        Calculate the tangent-tangent correlation for each path in the particle and set the tantan_correlations attribute.
 
         Args:
             None
         Returns:
-            None
+            (list):
+                List of Tan-Tan correlations for each path in the particle
         '''
         # Check to see if the interpolated skeleton derivatives are set. If not, raise a ValueError.
         if self._interp_skeleton_derivatives is None:
@@ -264,26 +301,34 @@ class Particle():
         # Loop over each path's interpolated skeleton derivative.
         for  derivative in self._interp_skeleton_derivatives:
             # Calculate the tangent vectors for the current path.
-            tangent_vectors = derivative / np.linalg.norm(derivative, axis=0, keepdims=True)
+            tangents = derivative / np.linalg.norm(derivative, axis=0, keepdims=True)
+
+            # Check to make sure the unit tangent vectors do not have sign flips.
+            # Compute the dot product of consecutive tangent vectors
+            dot_products = np.sum(tangents[:, :-1] * tangents[:, 1:], axis=0)
+            # Determine where the sign flips are needed
+            flips = np.ones(tangents.shape[1], dtype=float)
+            flips[1:] = np.cumprod(np.sign(dot_products) + (dot_products == 0))
+            # Apply the flips to the tangent vectors
+            tangents = tangents * flips
 
             # Get the number of tangent vectors.
-            _, N = tangent_vectors.shape
-            # Initialize an array to store the correlation for this path.
-            corr = np.zeros(N)
+            _, N = tangents.shape
+            
+            # Computer the dot product matrix
+            dot_product_matrix = np.dot(tangents.T, tangents)
 
-            # lag = 0: Perfect correlation (a vector is always perfectly correlated with itself)
-            corr[0] = 1.0
-            for k in range(1,N):
-                
-                # For lag k, consider pairs of vectors separated by k units
-                dot_products = np.sum(tangent_vectors[:, :-k] * tangent_vectors[:, k:], axis=0)
-                corr[k] = np.mean(dot_products)
+            # The correlation for lag k is the kth diagonal of the dot product matrix.
+            corr = [np.diag(dot_product_matrix, k) for k in range(N)]
 
-            # Append the correlation for this path to the list.
+            # Append the correlations for this path to the list.
             tantan_correlations.append(corr)
 
         # Set the Tan-Tan correlation attribute.
         self._tantan_correlations = tantan_correlations
+
+        # Return the Tan-Tan correlations.
+        return tantan_correlations
 
     def plot_particle(self,
                       ax: plt.Axes = None,
@@ -641,7 +686,7 @@ class Polydat():
 
     def add_image(self,
                   filepath: str,
-                  resolution: float) -> None:
+                  resolution: float) -> list[np.ndarray]:
         '''
         Load an image file and add it to the images attribute.
 
@@ -651,7 +696,8 @@ class Polydat():
             resolution (float):
                 The resolution of the image in nanometers per pixel.
         Returns:
-            None
+            images (list):
+                The list of images.
         '''
         # Make sure the resolution of the image matches the resolution of the other images.
         if self._resolution is not None and self._resolution != resolution:
@@ -663,10 +709,13 @@ class Polydat():
 
         # Append the image to the images attribute.
         self._images.append(image)
+
+        # Return the images.
+        return self._images
         
     def upscale(self,
                 magnification: float,
-                order = 3) -> None:
+                order = 3) -> Tuple[list[np.ndarray], float]:
         '''
         Upscale the full field images by a given magnification factor and interpolation order. The images are interpolated
         using the skimage.transform.resize function.
@@ -677,6 +726,9 @@ class Polydat():
                 but integer values are recommended. For example, a magnification factor of 2 will double the resolution.
             order (int):
                 The order of the interpolation. Default is 3.
+        Returns:
+            images, resolution (Tuple):
+                Tuple containing the upscaled images and the new resolution.
         '''
         # Check to see if the image has been upscaled. If so, raise a ValueError.
         if self._metadata.get('upscaled', False):
@@ -700,9 +752,12 @@ class Polydat():
         self._metadata['interpolation_order'] = order
         self._metadata['upscaled_resolution'] = new_resolution
 
+        # Return
+        return self._images, self._resolution
+
     def segment_particles(self,
                           minimum_area = 10,
-                          padding = 1) -> None:
+                          padding = 1) -> list[Particle]:
         '''
         Segment the particles in the full field images. A otsu threshold is applied to separate the particles from the 
         background, connected regions are labeled, and bounding boxes are calculated for each particle. The Particle objects
@@ -715,8 +770,10 @@ class Polydat():
             padding (int):
                 The number of pixels to pad the bounding box of the particle. Default is 1.
         Returns:
-            None
+            particles (list[Particle]):
+                The list of Particle objects.
         '''
+        # Initialize the number of particles and particle list attributes.
         self._num_particles['All'] = 0
         self._particles = []
         for image in self._images:
@@ -766,8 +823,11 @@ class Polydat():
                 
                 # Increment the number of particles attribute.
                 self._num_particles['All'] += 1
+        
+        # Return the particles.
+        return self._particles
 
-    def skeletonize_particles(self, method = 'zhang') -> None:
+    def skeletonize_particles(self, method = 'zhang') -> list[Particle]:
         '''
         Skeletonize the particles in particles attribute.
 
@@ -776,8 +836,9 @@ class Polydat():
                 The method to use for skeletonization. Default is 'lee'. Options are 'lee' and 'zhang'. See the
                 documentation for skimage.morphology.skeletonize for more information.
         Returns:
-            None
+            particles (list[Particle]):
         '''
+        # Loop over the particles and skeletonize them.
         for particle in self._particles[:]:
             try:
                 # Attempt to skeletonize the particle.
@@ -785,6 +846,10 @@ class Polydat():
             except ValueError:
                 # If the skeletonization fails, remove the particle from the list.
                 self._particles.remove(particle)
+        
+        # Return the particles.
+        return self._particles
+
 
     def classify_particles(self) -> None:
         '''
@@ -793,14 +858,21 @@ class Polydat():
         Args:
             None
         Returns:
-            None
+            particles (list[Particle]):
+                The list of Particle objects.
         '''
+        # Loop over the particles and classify them.
         for particle in self._particles:
             particle.classify()
             self._num_particles[particle.classification] = self._num_particles.get(particle.classification, 0) + 1
 
+        # Return the particles.
+        return self._particles
+
+
+
     def filter_particles(self,
-                         classifications: list[str]) -> None:
+                         classifications: list[str]) -> list[Particle]:
         '''
         Remove particles from the particles attribute that do not match the given classifications.
 
@@ -808,7 +880,8 @@ class Polydat():
             classifications (list):
                 The list of classifications to include in the filtering.
         Returns:
-            None
+            particles (list[Particle]):
+                The list of Particle objects.
         '''
         # Check to see if the classifications are valid.
         for classification in classifications:
@@ -820,6 +893,9 @@ class Polydat():
 
         # Update the included classifications attribute.
         self._included_classifications = classifications
+
+        # Return the filtered particles.
+        return self._particles
 
     def interpolate_skeletons(self,
                               step_size: float,
@@ -883,9 +959,6 @@ class Polydat():
 
         # Calculate the standard deviation for error bars.
         self._mean_squared_displacement_std = np.nanstd(padded_displacements**2, axis=0)
-        # Calculate the SEM (optional, preferred for error bars).
-        sample_count = np.sum(~np.isnan(padded_displacements), axis=0)
-        self._mean_squared_displacement_sem = self._mean_squared_displacement_std / np.sqrt(sample_count)
 
     def calc_tantan_correlations(self) -> None:
         '''
@@ -900,37 +973,53 @@ class Polydat():
         '''
         # Initialize the unnormalized contour length arrays and correlation arrays
         contour_samplings = []
-        tantan_correlations = []
+        tantan_correlations = defaultdict(list)
 
-        # Calculate the Tan-Tan correlation for each particle matching the classification.
+        # Loop over each particle and calculate the Tan-Tan correlation.
         for particle in self.particles:
+            # Calculate the Tan-Tan correlation for the particle.
             particle.calc_tantan_correlation()
+            
+            # If the tantan_correlation calculation fails, skip the particle.
+            if particle.tantan_correlations is None:
+                continue
+
+            # Append the contour samplings and correlations to the lists.
             contour_samplings.extend(particle.contour_samplings)
-            tantan_correlations.extend(particle.tantan_correlations)
+
+            # Loop over each path in the particle and append the correlations to the dictionary for each lag.
+            for path in particle.tantan_correlations:
+                for lag, corr in enumerate(path):
+                    tantan_correlations[lag].append(corr)
 
         # Find the maximum size of the contour arrays.
         max_size = max([len(contour) for contour in contour_samplings])
         # Pad the contour and correlation arrays so each array is the same size.
         padded_contours = np.array([
             np.pad(contour, (0, max_size - len(contour)), 'constant', constant_values = np.nan) for contour in contour_samplings])
-        padded_correlations = np.array([
-            np.pad(corr, (0, max_size - len(corr)), 'constant', constant_values = np.nan) for corr in tantan_correlations])
 
+        contour_sampling  = padded_contours[[~np.isnan(lengths).any() for lengths in padded_contours]][0]
         # Get the contour array containing no nan values. This is the real space lag array.
-        self._contour_sampling = padded_contours[[~np.isnan(lengths).any() for lengths in padded_contours]][0]
+        self._contour_sampling = contour_sampling
+
+        # Concatenate the correlation contributions from each particle path to a single array.
+        concatenated_correlations = {lag: np.concatenate(tantan_correlations[lag]) for lag in np.sort(list(tantan_correlations.keys()))}
 
         # Calculate the mean correlation for each lag.
-        # self._mean_tantan_correlation = np.abs(np.nanmean(padded_correlations, axis = 0))
-        self._mean_tantan_correlation = np.nanmean(padded_correlations, axis = 0)
-
+        mean_tantan_correlation = np.array([np.mean(concatenated_correlations[lag])
+                                            for lag in np.sort(list(concatenated_correlations.keys()))])
+        
         # Calculate the standard deviation for error bars.
-        self._mean_tantan_std = np.nanstd(padded_correlations, axis=0)
-        # Calculate the SEM (optional, preferred for error bars).
-        sample_count = np.sum(~np.isnan(padded_correlations), axis=0)
-        self._mean_tantan_sem = self._mean_tantan_std / np.sqrt(sample_count)
-
-        return self._contour_sampling, padded_correlations
-
+        std_tantan_correlation = np.array([np.std(concatenated_correlations[lag])
+                                           for lag in np.sort(list(concatenated_correlations.keys()))])
+        
+        # Set the mean and std Tan-Tan correlation attribute.
+        self._mean_tantan_correlation = mean_tantan_correlation
+        self._mean_tantan_std = std_tantan_correlation
+        
+        # Return the contour sampling, mean Tan-Tan correlation, and Tan-Tan correlation standard deviation.
+        return contour_sampling, mean_tantan_correlation, std_tantan_correlation
+    
     def calc_R2_lp(self,
                     lp_init = 10,
                     min_fitting_length: float = 0,
@@ -975,8 +1064,7 @@ class Polydat():
         # Filter the mean_squared_displacements array to the same size as xvals.
         yvals = self._mean_squared_displacements[inbetween_mask]
 
-        # Filter the mean_squared_displacement_sem array to the same size as xvals and invert it to get the weights.
-        # weights = 1 / self._mean_squared_displacement_sem[inbetween_mask]
+        # Filter the mean_squared_displacement_std array to the same size as xvals and invert it to get the weights.
         weights = 1 / self._mean_squared_displacement_std[inbetween_mask]
 
         # Create a Model object
@@ -1034,8 +1122,7 @@ class Polydat():
         # Filter the mean_correlations array to the same size as xvals.
         yvals = self._mean_tantan_correlation[inbetween_mask]
 
-        # Filter the mean_tantan_sem array to the same size as xvals and invert it to get the weights.
-        # weights = 1 / self._mean_tantan_sem[inbetween_mask]
+        # Filter the mean_tantan_std array to the same size as xvals and invert it to get the weights.
         weights = 1 / self._mean_tantan_std[inbetween_mask]
 
         # Create a Model object
@@ -1272,7 +1359,7 @@ class Polydat():
 
         # If the error bars are set, the error is the standard error of the mean. Otherwise, the error is 0.
         if error_bars:
-            # error = self._mean_squared_displacement_sem
+            # error = self._mean_squared_displacement_std
             error = self._mean_squared_displacement_std
         else:
             error = np.zeros_like(self._mean_squared_displacements)
@@ -1380,7 +1467,6 @@ class Polydat():
             ax.fill_between(x_,y_-dy_ci,y_+dy_ci,**ci_kwargs)
         # plot prediction band    
         if show_pd:
-            # error = self._mean_squared_displacement_sem
             error = self._mean_squared_displacement_std
             dy_pd = np.sqrt(dy_ci**2+error**2)
             ax.fill_between(x_,y_-dy_pd,y_+dy_pd,**pd_kwargs)
@@ -1431,7 +1517,6 @@ class Polydat():
 
         # If the error bars are set, the error is the standard error of the mean. Otherwise, the error is 0.
         if error_bars:
-            # error = self._mean_tantan_sem
             error = self._mean_tantan_std
         else:
             error = np.zeros_like(self._mean_tantan_correlation)
@@ -1524,7 +1609,6 @@ class Polydat():
             ax.fill_between(x_,y_-dy_ci,y_+dy_ci,**ci_kwargs)
         # plot prediction band    
         if show_pd:
-            # error = self._mean_tantan_sem
             error = self._mean_tantan_std
             dy_pd = np.sqrt(dy_ci**2+error**2)
             ax.fill_between(x_,y_-dy_pd,y_+dy_pd,**pd_kwargs)
@@ -1675,6 +1759,14 @@ class Polydat():
         path in each particle. 
         '''
         return self._mean_tantan_correlation
+    
+    @property
+    def mean_tantan_correlation_std(self) -> np.ndarray:
+        '''
+        The standard deviation of the Tan-Tan correlation of all particles. Calculated by taking the standard deviation of the
+        Tan-Tan correlation for each path in each particle. 
+        '''
+        return self._mean_tantan_correlation_std
     
     @property
     def R2_fit_result(self) -> lmfit.model.ModelResult:
