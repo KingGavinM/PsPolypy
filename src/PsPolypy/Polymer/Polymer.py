@@ -3,15 +3,18 @@ import copy
 
 import numpy as np
 import matplotlib.pyplot as plt
-from PIL import Image
 
 from scipy.interpolate import splprep, splev
 from scipy.stats import gaussian_kde
 
+from skimage import io
+from skimage.util import img_as_float
+from skimage.color import rgb2gray, rgba2rgb
 from skimage.transform import resize
 from skimage.filters import threshold_otsu
 from skimage.measure import label, regionprops
 from skimage.morphology import skeletonize
+
 
 import skan
 import networkx as nx
@@ -533,6 +536,74 @@ class Polydat():
         # Set the tantan fit result attribute.
         self._tantan_fit_result = None
 
+    ##########################
+    ##### Static Methods #####
+    ##########################
+    
+    @staticmethod
+    def __load_with_skimage(filepath: str) -> np.ndarray:
+        '''
+        Load an image file with skimage.io.imread.
+
+        Args:
+            filepath (str):
+                The file path to the image file.
+        Returns:
+            np.ndarray:
+                The image array.
+        '''
+        # Load the image file.
+        image = io.imread(filepath)
+        # Convert the image to grayscale if it is not already.
+        image = img_as_float(image)
+
+        # If the image has 4 channels, convert RGBA to RGB.
+        if image.ndim == 3 and image.shape[-1] == 4:
+            image = rgba2rgb(image)
+
+        # Convert to grayscale if the image is not already.
+        if image.ndim == 3 and image.shape[-1] == 3:
+            image = rgb2gray(image)
+
+        # Return the image.
+        return image
+    
+    @staticmethod
+    def __exponential_model(x, lp):
+        '''
+        Exponential decay model for curve fitting.
+
+        Args:
+            x (float):
+                The x value.
+            lp (float):
+                The persistence length.
+        Returns:
+            float:
+                The exponential decay model value.
+        '''
+        return np.exp(-x/(2*lp))
+
+    @staticmethod
+    def __R2_model(x, lp):
+        '''
+        End to end distance sqaured model for curve fitting.
+
+        Args:
+            x (float):
+                The x value.
+            lp (float):
+                The persistence length.
+        Returns:
+            float:
+                The R^2 model value.
+        '''
+        return 2*2*lp*x * (1 - (2*lp/(x + 1e-10)) * (1 - np.exp(-x / (2*lp))))
+    
+    #########################
+    ##### Class Methods #####
+    #########################
+
     @classmethod
     def from_images(cls,
                     filepaths: list[str],
@@ -555,44 +626,14 @@ class Polydat():
         '''
         images = []
         for filepath in filepaths:
-            # Load the image file.
-            with Image.open(filepath) as img:
-                grayscale = img.convert('L')
-                image = np.array(grayscale)/255.0
+            # Load the image using the skimage helper function.
+            image = cls.__load_with_skimage(filepath)
+
+            # Add the image to the images list.
             images.append(image)
             
         # Create the Polydat object.
         return cls(images = images, resolution = resolution, **metadata)
-
-    def __exponential_model(self, x, lp):
-        '''
-        Exponential decay model for curve fitting.
-
-        Args:
-            x (float):
-                The x value.
-            lp (float):
-                The persistence length.
-        Returns:
-            float:
-                The exponential decay model value.
-        '''
-        return np.exp(-x/(2*lp))
-    
-    def __R2_model(self, x, lp):
-        '''
-        End to end distance sqaured model for curve fitting.
-
-        Args:
-            x (float):
-                The x value.
-            lp (float):
-                The persistence length.
-        Returns:
-            float:
-                The R^2 model value.
-        '''
-        return 2*2*lp*x * (1 - (2*lp/(x + 1e-10)) * (1 - np.exp(-x / (2*lp))))
     
     ########################
     ##### Main Methods #####
@@ -617,10 +658,11 @@ class Polydat():
             raise ValueError('Resolution mismatch. All images must have the same resolution.')
         self._resolution = resolution
 
-        # Load the image file and append it to the images attribute.
-        with Image.open(filepath) as img:
-            grayscale = img.convert('L')
-            self._images.append(np.array(grayscale)/255.0)
+        # Load the image using the skimage helper function.
+        image = self.__load_with_skimage(filepath)
+
+        # Append the image to the images attribute.
+        self._images.append(image)
         
     def upscale(self,
                 magnification: float,
@@ -878,13 +920,16 @@ class Polydat():
         self._contour_sampling = padded_contours[[~np.isnan(lengths).any() for lengths in padded_contours]][0]
 
         # Calculate the mean correlation for each lag.
-        self._mean_tantan_correlation = np.abs(np.nanmean(padded_correlations, axis = 0))
+        # self._mean_tantan_correlation = np.abs(np.nanmean(padded_correlations, axis = 0))
+        self._mean_tantan_correlation = np.nanmean(padded_correlations, axis = 0)
 
         # Calculate the standard deviation for error bars.
         self._mean_tantan_std = np.nanstd(padded_correlations, axis=0)
         # Calculate the SEM (optional, preferred for error bars).
         sample_count = np.sum(~np.isnan(padded_correlations), axis=0)
         self._mean_tantan_sem = self._mean_tantan_std / np.sqrt(sample_count)
+
+        return self._contour_sampling, padded_correlations
 
     def calc_R2_lp(self,
                     lp_init = 10,
@@ -931,7 +976,8 @@ class Polydat():
         yvals = self._mean_squared_displacements[inbetween_mask]
 
         # Filter the mean_squared_displacement_sem array to the same size as xvals and invert it to get the weights.
-        weights = 1 / self._mean_squared_displacement_sem[inbetween_mask]
+        # weights = 1 / self._mean_squared_displacement_sem[inbetween_mask]
+        weights = 1 / self._mean_squared_displacement_std[inbetween_mask]
 
         # Create a Model object
         model = lmfit.Model(self.__R2_model)
@@ -989,7 +1035,8 @@ class Polydat():
         yvals = self._mean_tantan_correlation[inbetween_mask]
 
         # Filter the mean_tantan_sem array to the same size as xvals and invert it to get the weights.
-        weights = 1 / self._mean_tantan_sem[inbetween_mask]
+        # weights = 1 / self._mean_tantan_sem[inbetween_mask]
+        weights = 1 / self._mean_tantan_std[inbetween_mask]
 
         # Create a Model object
         model = lmfit.Model(self.__exponential_model)
@@ -1225,7 +1272,8 @@ class Polydat():
 
         # If the error bars are set, the error is the standard error of the mean. Otherwise, the error is 0.
         if error_bars:
-            error = self._mean_squared_displacement_sem
+            # error = self._mean_squared_displacement_sem
+            error = self._mean_squared_displacement_std
         else:
             error = np.zeros_like(self._mean_squared_displacements)
 
@@ -1332,7 +1380,8 @@ class Polydat():
             ax.fill_between(x_,y_-dy_ci,y_+dy_ci,**ci_kwargs)
         # plot prediction band    
         if show_pd:
-            error = self._mean_squared_displacement_sem
+            # error = self._mean_squared_displacement_sem
+            error = self._mean_squared_displacement_std
             dy_pd = np.sqrt(dy_ci**2+error**2)
             ax.fill_between(x_,y_-dy_pd,y_+dy_pd,**pd_kwargs)
 
@@ -1382,7 +1431,8 @@ class Polydat():
 
         # If the error bars are set, the error is the standard error of the mean. Otherwise, the error is 0.
         if error_bars:
-            error = self._mean_tantan_sem
+            # error = self._mean_tantan_sem
+            error = self._mean_tantan_std
         else:
             error = np.zeros_like(self._mean_tantan_correlation)
 
@@ -1474,7 +1524,8 @@ class Polydat():
             ax.fill_between(x_,y_-dy_ci,y_+dy_ci,**ci_kwargs)
         # plot prediction band    
         if show_pd:
-            error = self._mean_tantan_sem
+            # error = self._mean_tantan_sem
+            error = self._mean_tantan_std
             dy_pd = np.sqrt(dy_ci**2+error**2)
             ax.fill_between(x_,y_-dy_pd,y_+dy_pd,**pd_kwargs)
 
