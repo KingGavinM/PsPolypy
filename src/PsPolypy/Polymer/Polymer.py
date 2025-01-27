@@ -1005,6 +1005,8 @@ class Polydat():
         # Concatenate the correlation contributions from each particle path to a single array.
         concatenated_correlations = {lag: np.concatenate(tantan_correlations[lag]) for lag in np.sort(list(tantan_correlations.keys()))}
 
+        self.all_tantan_correlations = concatenated_correlations
+
         # Calculate the mean correlation for each lag.
         mean_tantan_correlation = np.array([np.mean(concatenated_correlations[lag])
                                             for lag in np.sort(list(concatenated_correlations.keys()))])
