@@ -20,6 +20,7 @@ from skimage.morphology import skeletonize
 import skan
 import networkx as nx
 import lmfit
+from lmfit import Minimizer, Parameters
 
 __all__ = ['Particle', 'Polydat']
 
@@ -318,8 +319,8 @@ class Particle():
             # Computer the dot product matrix
             dot_product_matrix = np.dot(tangents.T, tangents)
 
-            # The correlation for lag k is the kth diagonal of the dot product matrix.
-            corr = [np.diag(dot_product_matrix, k) for k in range(N)]
+            # The correlations are the upper triangle of the dot product matrix.
+            corr = [dot_product_matrix[i,i:] for i in range(N)]
 
             # Append the correlations for this path to the list.
             tantan_correlations.append(corr)
@@ -645,6 +646,114 @@ class Polydat():
         '''
         return 2*2*lp*x * (1 - (2*lp/(x + 1e-10)) * (1 - np.exp(-x / (2*lp))))
     
+    @staticmethod
+    def __calc_confidence_interval(data, npoints=1000, alpha=0.6826):
+        '''
+        Calculate the confidence interval for a given dataset using a Gaussian KDE.
+        The cumulative distribution function (CDF) is approximated by taking the cumulative sum of the PDF and
+        multiplying by the grid spacing. This approximates the lower and upper bounds of the confidence interval,
+        but is less computationally intensive as integrating the KDE for the CDF.
+
+        Args:
+            data (np.ndarray):
+                The data to calculate the confidence interval for.
+            npoints (int):
+                The number of points to evaluate the KDE at. Default is 1000.
+            alpha (float):
+                The confidence level. Default is 0.6826.
+        '''
+
+        # In the case that the data only has a single element, return it as lower and upper bounds.
+        if len(data) < 2:
+            return data[0], data[0]
+        
+        # If the data is all the same, return the value as the lower and upper bounds.
+        if np.isclose(np.var(data),0):
+            return data[0], data[0]
+        
+        # Calculate the KDE
+        kde = gaussian_kde(data)
+
+        # Get the x meshpoints for the KDE
+        x = np.linspace(np.min(data), np.max(data), npoints)
+
+        # Evaluate the PDF at these points (vectorized)
+        pdf_values = kde.evaluate(x)
+        
+        # Approximate the CDF by taking the cumulative sum of the PDF
+        # Multiply by the grid spacing (dx) to approximate the integral
+        dx = x[1] - x[0]  # assumes uniform spacing
+        cdf_values = np.cumsum(pdf_values) * dx
+        
+        # Normalize to make sure CDF goes from 0 to 1
+        cdf_values /= cdf_values[-1]
+
+        # Identify the lower and upper bounds of the confidence interval
+        lower_cdf = (1 - alpha) / 2
+        upper_cdf = 1 - (1 - alpha) / 2
+        
+        lower_index = np.searchsorted(cdf_values, lower_cdf)
+        upper_index = np.searchsorted(cdf_values, upper_cdf)
+        
+        lower_bound = x[lower_index]
+        upper_bound = x[upper_index]
+
+        return np.array([lower_bound, upper_bound])
+
+    @staticmethod
+    def __confidence_interval_minimizer(data, ci, model, initial_guess):
+        '''
+        Creates a minimizer for fitting a model to data using the confidence interval as the objective function.
+
+        Args:
+            data (np.ndarray):
+                The data to fit the model to. Shape (2,N).
+            ci (np.ndarray):
+                The confidence interval for the data.
+            model (callable):
+                The model to fit the data to.
+        '''
+
+        xvals, yvals = data
+
+        def objective_function(params, x, y, ci, model):
+            '''
+            Objective function for the minimizer. The objective function is the difference between the model
+            and the confidence interval.
+
+            Args:
+                params (lmfit.Parameters):
+                    The parameters to fit.
+                x (np.ndarray):
+                    The x values.
+                y (np.ndarray):
+                    The y values.
+                ci (np.ndarray):
+                    The confidence interval.
+                model (callable):
+                    The model to fit the data to.
+            Returns:
+                np.ndarray:
+                    The objective function values.
+            '''
+            # Set the parameters
+            lp = params['lp'].value
+
+            # Calculate the model values
+            model_values = model(x, lp)
+
+            # Calculate the residuals
+            yerr = np.abs([y - ci.T[0], ci.T[1] - y])
+            residuals = np.where(model_values > y, (model_values - y) / yerr[0], (y - model_values) / yerr[1])
+
+            return residuals
+        
+        # Initialize the parameters
+        params = Parameters()
+        params.add('lp', value=initial_guess, min=0)
+
+        return Minimizer(objective_function, params, fcn_args=(xvals, yvals, ci, model))
+
     #########################
     ##### Class Methods #####
     #########################
@@ -948,18 +1057,25 @@ class Polydat():
         # Pad the contour and displacement arrays so each array is the same size.
         padded_contours = np.array([
             np.pad(contour, (0, max_size - len(contour)), 'constant', constant_values = np.nan) for contour in contour_samplings])
-        padded_displacements = np.array([
-            np.pad(displacement, (0, max_size - len(displacement)), 'constant', constant_values = np.nan) for displacement in displacements])
+        padded_displacements_sq = np.array([
+            np.pad(displacement, (0, max_size - len(displacement)), 'constant', constant_values = np.nan) for displacement in displacements])**2
         
+        contour_sampling  = padded_contours[[~np.isnan(lengths).any() for lengths in padded_contours]][0]
         # Get the contour array containing no nan values. This is the real space lag array.
         self._contour_sampling = padded_contours[[~np.isnan(lengths).any() for lengths in padded_contours]][0]
 
         # Calculate the mean squared displacements for each lag.
-        self._mean_squared_displacements = np.nanmean(padded_displacements**2, axis = 0)
+        self._mean_squared_displacements = np.nanmean(padded_displacements_sq, axis = 0)
+
+        # Calculate the confidence interval for each lag.
+        ci_values = [self.__calc_confidence_interval(padded_displacements_sq[:,i][~np.isnan(padded_displacements_sq[:,i])]) for i in range(contour_sampling.shape[0])]
+        self._displacement_sq_confidence_intervals = np.array(ci_values)
 
         # Calculate the standard deviation for error bars.
-        self._mean_squared_displacement_std = np.nanstd(padded_displacements**2, axis=0)
+        self._mean_squared_displacement_std = np.nanstd(padded_displacements_sq, axis=0)
 
+        return padded_displacements_sq
+    
     def calc_tantan_correlations(self) -> None:
         '''
         Calculate the Tan-Tan correlation a set of particles. The correlation is calculated for each
@@ -973,60 +1089,55 @@ class Polydat():
         '''
         # Initialize the unnormalized contour length arrays and correlation arrays
         contour_samplings = []
-        tantan_correlations = defaultdict(list)
+        tantan_correlations = []
 
         # Loop over each particle and calculate the Tan-Tan correlation.
         for particle in self.particles:
             # Calculate the Tan-Tan correlation for the particle.
-            particle.calc_tantan_correlation()
-            
-            # If the tantan_correlation calculation fails, skip the particle.
-            if particle.tantan_correlations is None:
-                continue
+            particle_correlations = particle.calc_tantan_correlation()
 
             # Append the contour samplings and correlations to the lists.
             contour_samplings.extend(particle.contour_samplings)
-
-            # Loop over each path in the particle and append the correlations to the dictionary for each lag.
-            for path in particle.tantan_correlations:
-                for lag, corr in enumerate(path):
-                    tantan_correlations[lag].append(corr)
+            tantan_correlations.extend(particle_correlations)
 
         # Find the maximum size of the contour arrays.
         max_size = max([len(contour) for contour in contour_samplings])
         # Pad the contour and correlation arrays so each array is the same size.
         padded_contours = np.array([
             np.pad(contour, (0, max_size - len(contour)), 'constant', constant_values = np.nan) for contour in contour_samplings])
+        
+        padded_correlation_set = []
+        for corr_set in tantan_correlations:
+            padded_correlations = np.array([
+                np.pad(corr, (0, max_size - len(corr)), 'constant', constant_values = np.nan) for corr in corr_set])
+            padded_correlation_set.extend(padded_correlations)
+        padded_correlation_set = np.array(padded_correlation_set)
 
         contour_sampling  = padded_contours[[~np.isnan(lengths).any() for lengths in padded_contours]][0]
         # Get the contour array containing no nan values. This is the real space lag array.
         self._contour_sampling = contour_sampling
 
-        # Concatenate the correlation contributions from each particle path to a single array.
-        concatenated_correlations = {lag: np.concatenate(tantan_correlations[lag]) for lag in np.sort(list(tantan_correlations.keys()))}
-
-        self.all_tantan_correlations = concatenated_correlations
-
         # Calculate the mean correlation for each lag.
-        mean_tantan_correlation = np.array([np.mean(concatenated_correlations[lag])
-                                            for lag in np.sort(list(concatenated_correlations.keys()))])
+        mean_tantan_correlation = np.nanmean(padded_correlation_set, axis = 0)
         
         # Calculate the standard deviation for error bars.
-        std_tantan_correlation = np.array([np.std(concatenated_correlations[lag])
-                                           for lag in np.sort(list(concatenated_correlations.keys()))])
+        std_tantan_correlation = np.nanstd(padded_correlation_set, axis = 0)
+
+        # Calculate the confidence interval for each lag.
+        ci_values = [self.__calc_confidence_interval(padded_correlation_set[:,i][~np.isnan(padded_correlation_set[:,i])]) for i in range(contour_sampling.shape[0])]
+        self._tantan_confidence_intervals = np.array(ci_values)
         
         # Set the mean and std Tan-Tan correlation attribute.
         self._mean_tantan_correlation = mean_tantan_correlation
         self._mean_tantan_std = std_tantan_correlation
         
         # Return the contour sampling, mean Tan-Tan correlation, and Tan-Tan correlation standard deviation.
-        return contour_sampling, mean_tantan_correlation, std_tantan_correlation
-    
+        return padded_correlation_set
+
     def calc_R2_lp(self,
                     lp_init = 10,
                     min_fitting_length: float = 0,
-                    max_fitting_length: float = np.inf,
-                    fit_kwargs: dict = None) -> None:
+                    max_fitting_length: float = np.inf) -> None:
         '''
         Calculate the persistence length of the polymer particles using the end to end distance squared model. The mean
         squared displacements will only be fit between the minimum and maximum contour lengths. This method uses the lmfit
@@ -1049,10 +1160,6 @@ class Polydat():
         Returns:
             None
         '''
-        # Handle the default kwargs if they are None.
-        if fit_kwargs is None:
-            fit_kwargs = {'scale_covar': True}
-
         # Get the mask for the xvalues between the minimum and maximum contour lengths.
         inbetween_mask = (self._contour_sampling >= min_fitting_length) * (self._contour_sampling <= max_fitting_length)
 
@@ -1066,26 +1173,41 @@ class Polydat():
         # Filter the mean_squared_displacements array to the same size as xvals.
         yvals = self._mean_squared_displacements[inbetween_mask]
 
-        # Filter the mean_squared_displacement_std array to the same size as xvals and invert it to get the weights.
-        weights = 1 / self._mean_squared_displacement_std[inbetween_mask]
+        # Filter the confidence interval array to the same size as xvals.
+        ci = self._displacement_sq_confidence_intervals[inbetween_mask]
 
-        # Create a Model object
-        model = lmfit.Model(self.__R2_model)
+        # Create a Minimizer object for the confidence interval minimizer.
+        minimizer = self.__confidence_interval_minimizer(data = (xvals, yvals), ci = ci, model = self.__R2_model, initial_guess = lp_init)
 
-        # Create a Parameters object
-        params = model.make_params(lp = lp_init)
-
-        # Fit the model to the data.
-        result = model.fit(yvals, params, x = xvals, weights = weights, **fit_kwargs)
+        # Perform the minimization.
+        result = minimizer.minimize()
 
         # Set the R2_fit_result attribute.
         self._R2_fit_result = result
+
+        # Return the fit result.
+        return result
+
+        # Code for fitting according to the weight of the standard deviation.
+        # # Filter the mean_squared_displacement_std array to the same size as xvals and invert it to get the weights.
+        # weights = 1 / self._mean_squared_displacement_std[inbetween_mask]
+
+        # # Create a Model object
+        # model = lmfit.Model(self.__R2_model)
+
+        # # Create a Parameters object
+        # params = model.make_params(lp = lp_init)
+
+        # # Fit the model to the data.
+        # result = model.fit(yvals, params, x = xvals, weights = weights, **fit_kwargs)
+
+        # # Set the R2_fit_result attribute.
+        # self._R2_fit_result = result
     
     def calc_tantan_lp(self,
                        lp_init = 10,
                        min_fitting_length: float = 0,
-                       max_fitting_length: float = np.inf,
-                       fit_kwargs: dict = None) -> None:
+                       max_fitting_length: float = np.inf) -> None:
         '''
         Calculate the persistence length of the polymer particles using the Tan-Tan correlation method. The correlation will
         only be fit between the minimum and maximum contour lengths. This method uses the lmfit package for curve fitting.
@@ -1102,15 +1224,9 @@ class Polydat():
                 The minimum contour length to fit the exponential decay to. Default is 0.
             max_fitting_length (float):
                 The maximum contour length to fit the exponential decay to. Default is np.inf.
-            fit_kwargs (dict):
-                Keyword arguments to pass to the lmfit Model.fit() method. Default is None.
         Returns:
             None
         '''
-        # Handle the default kwargs if they are None.
-        if fit_kwargs is None:
-            fit_kwargs = {'scale_covar': True}
-
         # Get the mask for the xvalues between the minimum and maximum contour lengths.
         inbetween_mask = (self._contour_sampling >= min_fitting_length) * (self._contour_sampling <= max_fitting_length)
 
@@ -1124,20 +1240,36 @@ class Polydat():
         # Filter the mean_correlations array to the same size as xvals.
         yvals = self._mean_tantan_correlation[inbetween_mask]
 
-        # Filter the mean_tantan_std array to the same size as xvals and invert it to get the weights.
-        weights = 1 / self._mean_tantan_std[inbetween_mask]
+        # Filter the confidence interval array to the same size as xvals.
+        ci = self._tantan_confidence_intervals[inbetween_mask]
 
-        # Create a Model object
-        model = lmfit.Model(self.__exponential_model)
+        # Create a Minimizer object for the confidence interval minimizer.
+        minimizer = self.__confidence_interval_minimizer(data = (xvals, yvals), ci = ci, model = self.__exponential_model, initial_guess = lp_init)
 
-        # Create a Parameters object
-        params = model.make_params(lp = lp_init)
-
-        # Fit the model to the data.
-        result = model.fit(yvals, params, x = xvals, weights = weights, **fit_kwargs)
+        # Perform the minimization.
+        result = minimizer.minimize()
 
         # Set the tantan_fit_result attribute.
         self._tantan_fit_result = result
+
+        # Return the fit result.
+        return result
+    
+        # Code for fitting according to the weight of the standard deviation.
+        # # Filter the mean_tantan_std array to the same size as xvals and invert it to get the weights.
+        # weights = 1 / self._mean_tantan_std[inbetween_mask]
+
+        # # Create a Model object
+        # model = lmfit.Model(self.__exponential_model)
+
+        # # Create a Parameters object
+        # params = model.make_params(lp = lp_init)
+
+        # # Fit the model to the data.
+        # result = model.fit(yvals, params, x = xvals, weights = weights, **fit_kwargs)
+
+        # # Set the tantan_fit_result attribute.
+        # self._tantan_fit_result = result
 
     def plot_image(self,
                    index: int = 0,
@@ -1362,7 +1494,8 @@ class Polydat():
         # If the error bars are set, the error is the standard error of the mean. Otherwise, the error is 0.
         if error_bars:
             # error = self._mean_squared_displacement_std
-            error = self._mean_squared_displacement_std
+            ci = self._displacement_sq_confidence_intervals
+            error = np.abs([self._mean_squared_displacements - ci[:,0], ci[:,1] - self._mean_squared_displacements])
         else:
             error = np.zeros_like(self._mean_squared_displacements)
 
@@ -1376,12 +1509,12 @@ class Polydat():
             # Plot the mean Tan-Tan correlation between the minimum and maximum contour lengths with error bars.
             ax.errorbar(self._contour_sampling[inbetween_mask],
                         self._mean_squared_displacements[inbetween_mask],
-                        yerr = error[inbetween_mask],
+                        yerr = error[:,inbetween_mask],
                         **inc_kwargs)
             # Plot the mean Tan-Tan correlation outside the minimum and maximum contour lengths with error bars.
             ax.errorbar(self._contour_sampling[~inbetween_mask],
                         self._mean_squared_displacements[~inbetween_mask],
-                        yerr = error[~inbetween_mask],
+                        yerr = error[:,~inbetween_mask],
                         **exc_kwargs)
             
             # Draw the verical lines for the minimum and maximum contour lengths.
@@ -1400,12 +1533,8 @@ class Polydat():
     def plot_mean_squared_displacements_fit(self,
                                             ax: plt.Axes = None,
                                             show_init: bool = False,
-                                            show_ci: bool = False,
-                                            show_pd: bool = False,
                                             fit_kwargs: dict = None,
-                                            init_kwargs: dict = None,
-                                            ci_kwargs: dict = None,
-                                            pd_kwargs: dict = None) -> plt.Axes:
+                                            init_kwargs: dict = None,) -> plt.Axes:
         '''
         Plot the fitted R2 model of the mean squared displacements.
 
@@ -1414,24 +1543,12 @@ class Polydat():
                 The matplotlib axis object to plot the image on.
             show_init (bool):
                 Whether or not to show the initial guess of the R2 model. Default is False.
-            show_ci (bool):
-                Whether or not to show the 95% confidence interval of the R2 model. Default is False.
-            show_pd (bool):
-                Whether or not to show the 95% prediction band of the R2 model. Default is False.
             fit_kwargs (dict):
                 Keyword arguments to pass to matplotlib.pyplot.plot for the fitted R2 model.
                 Default is None.
             init_kwargs (dict):
                 Keyword arguments to pass to matplotlib.pyplot.plot for the initial guess of the R2 model.
                 Only used if show_init is True.
-                Default is None.
-            ci_kwargs (dict):
-                Keyword arguments to pass to matplotlib.pyplot.fill_between for the 95% confidence interval of the R2 model.
-                Only used if show_ci is True.
-                Default is None.
-            pd_kwargs (dict):
-                Keyword arguments to pass to matplotlib.pyplot.fill_between for the 95% prediction band of the R2 model.
-                Only used if show_pd is True.
                 Default is None.
         Returns:
             ax (matplotlib.axes.Axes):
@@ -1447,10 +1564,6 @@ class Polydat():
             fit_kwargs = {'color': 'Red', 'lw': 1.5, 'label': 'Best Fit'}
         if init_kwargs is None:
             init_kwargs = {'color': 'Red', 'lw': 0.75, 'linestyle': '--', 'label': 'Initial Guess'}
-        if ci_kwargs is None:
-            ci_kwargs = {'color': 'r', 'alpha': 0.4,'ec': 'r','label': '95% Confidence Interval'}
-        if pd_kwargs is None:
-            pd_kwargs = {'color': 'Gray', 'alpha': 0.3,'ec': 'k','label': '95% Prediction Band'}
 
         # Plot the fitted R2 model.
         x_ = self._contour_sampling
@@ -1462,16 +1575,6 @@ class Polydat():
             ax.plot(self._contour_sampling,
                     self.__R2_model(self._contour_sampling, self._R2_fit_result.params['lp'].init_value),
                     **init_kwargs)
-        
-        # plot Confidence Interval
-        if show_ci:
-            dy_ci = self._R2_fit_result.eval_uncertainty(x=x_,sigma=1.96)
-            ax.fill_between(x_,y_-dy_ci,y_+dy_ci,**ci_kwargs)
-        # plot prediction band    
-        if show_pd:
-            error = self._mean_squared_displacement_std
-            dy_pd = np.sqrt(dy_ci**2+error**2)
-            ax.fill_between(x_,y_-dy_pd,y_+dy_pd,**pd_kwargs)
 
         return ax
     
@@ -1519,7 +1622,9 @@ class Polydat():
 
         # If the error bars are set, the error is the standard error of the mean. Otherwise, the error is 0.
         if error_bars:
-            error = self._mean_tantan_std
+            # error = self._mean_tantan_std
+            ci = self._tantan_confidence_intervals
+            error = np.abs([self._mean_tantan_correlation - ci[:,0], ci[:,1] - self._mean_tantan_correlation])
         else:
             error = np.zeros_like(self._mean_tantan_correlation)
 
@@ -1534,12 +1639,12 @@ class Polydat():
             # Plot the mean Tan-Tan correlation between the minimum and maximum contour lengths with error bars.
             ax.errorbar(self._contour_sampling[inbetween_mask],
                         self._mean_tantan_correlation[inbetween_mask],
-                        yerr = error[inbetween_mask],
+                        yerr = error[:, inbetween_mask],
                         **inc_kwargs)
             # Plot the mean Tan-Tan correlation outside the minimum and maximum contour lengths with error bars.
             ax.errorbar(self._contour_sampling[~inbetween_mask],
                         self._mean_tantan_correlation[~inbetween_mask],
-                        yerr = error[~inbetween_mask],
+                        yerr = error[:, ~inbetween_mask],
                         **exc_kwargs)
             
             # Draw the verical lines for the minimum and maximum contour lengths.
@@ -1558,12 +1663,8 @@ class Polydat():
     def plot_mean_tantan_correlation_fit(self,
                                          ax: plt.Axes = None,
                                          show_init: bool = False,
-                                         show_ci: bool = False,
-                                         show_pd: bool = False,
                                          fit_kwargs: dict = None,
-                                         init_kwargs: dict = None,
-                                         ci_kwargs: dict = None,
-                                         pd_kwargs: dict = None) -> plt.Axes:
+                                         init_kwargs: dict = None,) -> plt.Axes:
         '''
         Plot the fitted exponential decay of the mean Tan-Tan correlation.
 
@@ -1589,10 +1690,6 @@ class Polydat():
             fit_kwargs = {'color': 'Red', 'lw': 1.5, 'label': 'Best Fit'}
         if init_kwargs is None:
             init_kwargs = {'color': 'Red', 'lw': 0.75, 'linestyle': '--', 'label': 'Initial Guess'}
-        if ci_kwargs is None:
-            ci_kwargs = {'color': 'r', 'alpha': 0.4,'ec': 'r','label': '95% Confidence Interval'}
-        if pd_kwargs is None:
-            pd_kwargs = {'color': 'Gray', 'alpha': 0.3,'ec': 'k','label': '95% Prediction Band'}
 
         # Plot the fitted exponential model.
         x_ = self._contour_sampling
@@ -1604,16 +1701,6 @@ class Polydat():
             ax.plot(x_,
                     self.__exponential_model(self._contour_sampling, self._tantan_fit_result.params['lp'].init_value),
                     **init_kwargs)
-
-        dy_ci = self._tantan_fit_result.eval_uncertainty(x=x_,sigma=1.96)
-        # plot Confidence Interval
-        if show_ci:
-            ax.fill_between(x_,y_-dy_ci,y_+dy_ci,**ci_kwargs)
-        # plot prediction band    
-        if show_pd:
-            error = self._mean_tantan_std
-            dy_pd = np.sqrt(dy_ci**2+error**2)
-            ax.fill_between(x_,y_-dy_pd,y_+dy_pd,**pd_kwargs)
 
         return ax
     
