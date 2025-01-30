@@ -1,4 +1,3 @@
-from collections import defaultdict
 from typing import Any, Tuple, Dict
 import copy
 
@@ -6,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from scipy.interpolate import splprep, splev
+from scipy import integrate, interpolate
 from scipy.stats import gaussian_kde
 
 from skimage import io
@@ -135,7 +135,7 @@ class Particle():
 
     def classify(self) -> str:
         '''
-        Classify the particle as Linear, Branched, Loop, Branched-Loop, or Unknown based on the skeleton summary.
+        Classify the particle as Linear, Branched, Looped, Branched-Looped, or Unknown based on the skeleton summary.
         
         Args:
             None
@@ -166,7 +166,7 @@ class Particle():
             else:
                 classification = 'Branched'
 
-        # Check if the particle is classified as a loop:
+        # Check if the particle is classified as looped:
         elif np.all(unique_branch_types == 3):
             classification = 'Looped'
 
@@ -272,10 +272,22 @@ class Particle():
         displacements = []
 
         # Loop over each path's interpolated skeleton coordinates.
-        for (splinex, spliney) in self._interp_skeleton_coordinates:
-            # Calculate the displacements for the current path.
-            displacements.append(np.sqrt((splinex - splinex[0])**2 + (spliney - spliney[0])**2))
+        for coords in self._interp_skeleton_coordinates:
+            coords = np.array(coords)
 
+            N = len(coords.T)
+
+            # Compute the displacement matrix
+            diff = coords[:, :, None] - coords[:, None, :]
+            sq_diff = np.sum(diff**2, axis=0)
+            disp_mat = np.sqrt(sq_diff)
+
+            # The displacments for each subpath are the upper triangle of the displacement matrix.
+            disp_values = [disp_mat[i, i:] for i in range(N)]
+            
+            # Append the displacements for this path to the list.
+            displacements.append(disp_values)         
+        
         # Set the displacements attribute.
         self._displacements = displacements
 
@@ -319,7 +331,7 @@ class Particle():
             # Computer the dot product matrix
             dot_product_matrix = np.dot(tangents.T, tangents)
 
-            # The correlations are the upper triangle of the dot product matrix.
+            # The correlations for each subpath are the upper triangle of the dot product matrix.
             corr = [dot_product_matrix[i,i:] for i in range(N)]
 
             # Append the correlations for this path to the list.
@@ -553,10 +565,10 @@ class Polydat():
         self._particles = []
 
         # Set the number of particles attribute.
-        self._num_particles = {'All': 0, 'Linear': 0, 'Branched': 0, 'Loop': 0, 'Branched-Looped': 0, 'Unknown': 0}
+        self._num_particles = {'All': 0, 'Linear': 0, 'Branched': 0, 'Looped': 0, 'Branched-Looped': 0, 'Unknown': 0}
 
         # Set the included_classifications attribute.
-        self._included_classifications = ['Linear', 'Branched', 'Loop', 'Branched-Looped', 'Unknown']
+        self._included_classifications = ['Linear', 'Branched', 'Looped', 'Branched-Looped', 'Unknown']
 
         # Set the contour lengths attribute.
         self._contour_lengths = None
@@ -647,7 +659,7 @@ class Polydat():
         return 2*2*lp*x * (1 - (2*lp/(x + 1e-10)) * (1 - np.exp(-x / (2*lp))))
     
     @staticmethod
-    def __calc_confidence_interval(data, npoints=1000, alpha=0.6826):
+    def __calc_confidence_interval(data, npoints=1000, confidence_level=0.6826):
         '''
         Calculate the confidence interval for a given dataset using a Gaussian KDE.
         The cumulative distribution function (CDF) is approximated by taking the cumulative sum of the PDF and
@@ -679,26 +691,22 @@ class Polydat():
 
         # Evaluate the PDF at these points (vectorized)
         pdf_values = kde.evaluate(x)
-        
-        # Approximate the CDF by taking the cumulative sum of the PDF
-        # Multiply by the grid spacing (dx) to approximate the integral
-        dx = x[1] - x[0]  # assumes uniform spacing
-        cdf_values = np.cumsum(pdf_values) * dx
-        
-        # Normalize to make sure CDF goes from 0 to 1
-        cdf_values /= cdf_values[-1]
 
-        # Identify the lower and upper bounds of the confidence interval
-        lower_cdf = (1 - alpha) / 2
-        upper_cdf = 1 - (1 - alpha) / 2
+        # Calculate CDF using cumulative trapezoidal integration
+        cdf = integrate.cumulative_trapezoid(pdf_values, x, initial=0)
+        cdf /= cdf[-1]  # Normalize CDF
         
-        lower_index = np.searchsorted(cdf_values, lower_cdf)
-        upper_index = np.searchsorted(cdf_values, upper_cdf)
+        # Create the Percent Point Function (inverse of CDF)
+        ppf = interpolate.interp1d(cdf, x, kind='linear', bounds_error=False, fill_value=(x[0], x[-1]))
         
-        lower_bound = x[lower_index]
-        upper_bound = x[upper_index]
-
-        return np.array([lower_bound, upper_bound])
+        # Calculate confidence interval
+        lower_percentile = (1 - confidence_level) / 2
+        upper_percentile = 1 - lower_percentile
+        
+        lower_bound = ppf(lower_percentile)
+        upper_bound = ppf(upper_percentile)
+        
+        return lower_bound, upper_bound
 
     @staticmethod
     def __confidence_interval_minimizer(data, ci, model, initial_guess):
@@ -713,9 +721,10 @@ class Polydat():
             model (callable):
                 The model to fit the data to.
         '''
-
+        # Unpack the data
         xvals, yvals = data
 
+        # Define the objective function callable
         def objective_function(params, x, y, ci, model):
             '''
             Objective function for the minimizer. The objective function is the difference between the model
@@ -994,8 +1003,8 @@ class Polydat():
         '''
         # Check to see if the classifications are valid.
         for classification in classifications:
-            if classification not in ['Linear', 'Branched', 'Loop', 'Branched-Looped', 'Unknown']:
-                raise ValueError(f'Invalid classification: {classification}. Valid classifications are Linear, Branched, Loop, Branched-Looped, and Unknown.')
+            if classification not in ['Linear', 'Branched', 'Looped', 'Branched-Looped', 'Unknown']:
+                raise ValueError(f'Invalid classification: {classification}. Valid classifications are Linear, Branched, Looped, Branched-Looped, and Unknown.')
 
         # Set the particles attribute to only include particles with the given classifications.
         self._particles = [particle for particle in self._particles if particle.classification in classifications]
@@ -1044,37 +1053,49 @@ class Polydat():
         '''
         # Initialize the unnormalized contour length arryas and displacements array.
         contour_samplings = []
-        displacements = []
+        ragged_displacements_list = []
 
         # Calculate the displacements for each particle matching the classification.
         for particle in self._particles:
             particle.calc_displacements()
             contour_samplings.extend(particle.contour_samplings)
-            displacements.extend(particle.displacements)
+            ragged_displacements_list.append(particle.displacements)
 
         # Find the maximum size of the contour arrays.
         max_size = max([len(contour) for contour in contour_samplings])
         # Pad the contour and displacement arrays so each array is the same size.
         padded_contours = np.array([
             np.pad(contour, (0, max_size - len(contour)), 'constant', constant_values = np.nan) for contour in contour_samplings])
-        padded_displacements_sq = np.array([
-            np.pad(displacement, (0, max_size - len(displacement)), 'constant', constant_values = np.nan) for displacement in displacements])**2
-        
-        contour_sampling  = padded_contours[[~np.isnan(lengths).any() for lengths in padded_contours]][0]
+        self._padded_contours = padded_contours
+        # Get the contour sampling of the longest
+        contour_sampling = padded_contours[[~np.isnan(lengths).any() for lengths in padded_contours]][0]
         # Get the contour array containing no nan values. This is the real space lag array.
-        self._contour_sampling = padded_contours[[~np.isnan(lengths).any() for lengths in padded_contours]][0]
+        self._contour_sampling = contour_sampling
+
+        # Unravel the ragged_displacements_list into a more uniform shape.
+        stacked_paths = []
+        for particle_paths in ragged_displacements_list:
+            stacked_paths.extend(particle_paths)
+        padded_disp_set = []
+        for disp_set in stacked_paths:
+            padded_displacemetns = np.array([
+                np.pad(displacement, (0, max_size - len(displacement)), 'constant', constant_values = np.nan) for displacement in disp_set])
+            padded_disp_set.extend(padded_displacemetns)
+        padded_disp_set = np.array(padded_disp_set)
+
+        padded_disp_sq = padded_disp_set**2
 
         # Calculate the mean squared displacements for each lag.
-        self._mean_squared_displacements = np.nanmean(padded_displacements_sq, axis = 0)
+        self._mean_squared_displacements = np.nanmean(padded_disp_sq, axis = 0)
 
         # Calculate the confidence interval for each lag.
-        ci_values = [self.__calc_confidence_interval(padded_displacements_sq[:,i][~np.isnan(padded_displacements_sq[:,i])]) for i in range(contour_sampling.shape[0])]
+        ci_values = [self.__calc_confidence_interval(padded_disp_sq[:,i][~np.isnan(padded_disp_sq[:,i])]) for i in range(contour_sampling.shape[0])]
         self._displacement_sq_confidence_intervals = np.array(ci_values)
 
         # Calculate the standard deviation for error bars.
-        self._mean_squared_displacement_std = np.nanstd(padded_displacements_sq, axis=0)
+        self._mean_squared_displacement_std = np.nanstd(padded_disp_sq, axis=0)
 
-        return padded_displacements_sq
+        return ragged_displacements_list
     
     def calc_tantan_correlations(self) -> None:
         '''
@@ -1089,7 +1110,7 @@ class Polydat():
         '''
         # Initialize the unnormalized contour length arrays and correlation arrays
         contour_samplings = []
-        tantan_correlations = []
+        ragged_tantan_correlations = []
 
         # Loop over each particle and calculate the Tan-Tan correlation.
         for particle in self.particles:
@@ -1098,16 +1119,21 @@ class Polydat():
 
             # Append the contour samplings and correlations to the lists.
             contour_samplings.extend(particle.contour_samplings)
-            tantan_correlations.extend(particle_correlations)
+            ragged_tantan_correlations.append(particle_correlations)
 
         # Find the maximum size of the contour arrays.
         max_size = max([len(contour) for contour in contour_samplings])
         # Pad the contour and correlation arrays so each array is the same size.
         padded_contours = np.array([
             np.pad(contour, (0, max_size - len(contour)), 'constant', constant_values = np.nan) for contour in contour_samplings])
-        
+        self._padded_contours = padded_contours
+
+        # Unravel the ragged_tantan_correlations into a more uniform shape.
+        stacked_paths = []
+        for particle_paths in ragged_tantan_correlations:
+            stacked_paths.extend(particle_paths)
         padded_correlation_set = []
-        for corr_set in tantan_correlations:
+        for corr_set in stacked_paths:
             padded_correlations = np.array([
                 np.pad(corr, (0, max_size - len(corr)), 'constant', constant_values = np.nan) for corr in corr_set])
             padded_correlation_set.extend(padded_correlations)
@@ -1131,8 +1157,8 @@ class Polydat():
         self._mean_tantan_correlation = mean_tantan_correlation
         self._mean_tantan_std = std_tantan_correlation
         
-        # Return the contour sampling, mean Tan-Tan correlation, and Tan-Tan correlation standard deviation.
-        return padded_correlation_set
+        # Return the ragged_tantan_correlations.
+        return ragged_tantan_correlations
 
     def calc_R2_lp(self,
                     lp_init = 10,
@@ -1187,22 +1213,6 @@ class Polydat():
 
         # Return the fit result.
         return result
-
-        # Code for fitting according to the weight of the standard deviation.
-        # # Filter the mean_squared_displacement_std array to the same size as xvals and invert it to get the weights.
-        # weights = 1 / self._mean_squared_displacement_std[inbetween_mask]
-
-        # # Create a Model object
-        # model = lmfit.Model(self.__R2_model)
-
-        # # Create a Parameters object
-        # params = model.make_params(lp = lp_init)
-
-        # # Fit the model to the data.
-        # result = model.fit(yvals, params, x = xvals, weights = weights, **fit_kwargs)
-
-        # # Set the R2_fit_result attribute.
-        # self._R2_fit_result = result
     
     def calc_tantan_lp(self,
                        lp_init = 10,
@@ -1254,22 +1264,6 @@ class Polydat():
 
         # Return the fit result.
         return result
-    
-        # Code for fitting according to the weight of the standard deviation.
-        # # Filter the mean_tantan_std array to the same size as xvals and invert it to get the weights.
-        # weights = 1 / self._mean_tantan_std[inbetween_mask]
-
-        # # Create a Model object
-        # model = lmfit.Model(self.__exponential_model)
-
-        # # Create a Parameters object
-        # params = model.make_params(lp = lp_init)
-
-        # # Fit the model to the data.
-        # result = model.fit(yvals, params, x = xvals, weights = weights, **fit_kwargs)
-
-        # # Set the tantan_fit_result attribute.
-        # self._tantan_fit_result = result
 
     def plot_image(self,
                    index: int = 0,
@@ -1449,6 +1443,102 @@ class Polydat():
         # Return the ax.
         return ax
     
+    def plot_subpath_contour_distribution(self,
+                                          n_points: int = 100,
+                                          ax: plt.Axes = None,
+                                          inc_dist_kwargs: dict = None,
+                                          inc_fill_kwargs: dict = None,
+                                          exc_dist_kwargs: dict = None,
+                                          exc_fill_kwargs: dict = None,
+                                          vline_kwargs: dict = None) -> plt.Axes:
+        '''
+        Plot the distribution of contour lengths for all subpaths for all paths in all particles. Uses Gaussian
+        KDE to create a smooth distribution.
+
+        Args:
+            n_points (int):
+                The number of points to use for the Gaussian KDE. Default is 100.
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object to plot the image on.
+            inc_dist_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.plot for the included distribution. (Between the minimum and
+                maximum contour lengths used for fitting) If the minimum and maximum contour lenths are 0 and np.inf, these
+                kwargs will be used for the entire distribution.
+                Default is None
+            inc_fill_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.fill_between for the indcluded distribution.
+                Default is None.
+            exc_dist_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.plot for the excluded distribution. (Outside the minimum and
+                maximum contour lengths used for fitting) 
+                Default is None.
+            exc_fill_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.fill_between for the excluded distribution.
+                Default is None
+            vline_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.axvline for the vertical lines at the minimum and maximum
+                contour lengths.
+                Default is None
+        Returns:
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object.
+        '''
+        # Create the ax object if it is not set.
+        ax = ax or plt.gca()
+
+        # Handle the default kwargs if they are none.
+        if inc_dist_kwargs is None:
+            inc_dist_kwargs = {'color': 'Blue', 'lw': 2, 'label': 'Included data'}
+        if inc_fill_kwargs is None:
+            inc_fill_kwargs = {'color': 'LightBlue', 'alpha': 0.5}
+        if exc_dist_kwargs is None:
+            exc_dist_kwargs = {'color': 'Gray', 'lw': 2, 'alpha': 0.5, 'label': 'Excluded data'}
+        if exc_fill_kwargs is None:
+            exc_fill_kwargs = {'color': 'LightGray', 'alpha': 0.5}
+        if vline_kwargs is None:
+            vline_kwargs = {'color': 'Blue', 'lw': 0.7, 'dashes': [8,3]}
+
+        # Create a distribution of all the polymer branch lengths.
+        xvals = np.linspace(0, self._contour_lengths.max(), n_points)
+        kde = gaussian_kde(self._padded_contours[~np.isnan(self._padded_contours)])
+
+        # If the minimum and maximum contour lengths are set, only color the region between the minimum and maximum, plot
+        # the excluded regions in gray and plot vertical lines at the minimum and maximum contour lengths.
+        if self._min_fitting_length != 0 or self._max_fitting_length != np.inf:
+            
+            # Get the mask for the xvalues less than, in between, and greather than the min and max contour lengths.
+            inbetween_mask = (xvals >= self._min_fitting_length) * (xvals <= self._max_fitting_length)
+            less_mask = xvals <= self._min_fitting_length
+            greater_mask = xvals >= self._max_fitting_length
+
+            # Plot the distribution between the minimum and maximum contour lengths.
+            ax.plot(xvals[inbetween_mask], kde(xvals[inbetween_mask]), **inc_dist_kwargs)
+            # Fill the distribution between the minimum and maximum contour lengths.
+            ax.fill_between(xvals[inbetween_mask], kde(xvals[inbetween_mask]), **inc_fill_kwargs)
+
+            # Plot the distribution outside the minimum and maximum contour lengths.
+            ax.plot(xvals[less_mask], kde(xvals[less_mask]), **exc_dist_kwargs)
+            ax.fill_between(xvals[less_mask], kde(xvals[less_mask]), **exc_fill_kwargs)
+
+            # Create a copy of the dist kwargs without the label so it isn't shown in the legend twice.
+            exc_dist_kwargs = exc_dist_kwargs.copy()
+            exc_dist_kwargs.pop('label', None)
+            ax.plot(xvals[greater_mask], kde(xvals[greater_mask]), **exc_dist_kwargs)
+            ax.fill_between(xvals[greater_mask], kde(xvals[greater_mask]), **exc_fill_kwargs)
+
+            # Draw the vertical lines for the minimum and maximum contour lengths.
+            ax.axvline(self._min_fitting_length, **vline_kwargs)
+            ax.axvline(self._max_fitting_length, **vline_kwargs)
+
+        else:
+            # Plot the distribution.
+            ax.plot(xvals, kde(xvals), **inc_dist_kwargs)
+            # Fill the distribution.
+            ax.fill_between(xvals, kde(xvals), **inc_fill_kwargs)
+        
+        # Return the ax.
+        return ax
+    
     def plot_mean_squared_displacements(self,
                                         error_bars: bool = False,
                                         ax: plt.Axes = None,
@@ -1497,7 +1587,7 @@ class Polydat():
             ci = self._displacement_sq_confidence_intervals
             error = np.abs([self._mean_squared_displacements - ci[:,0], ci[:,1] - self._mean_squared_displacements])
         else:
-            error = np.zeros_like(self._mean_squared_displacements)
+            error = np.zeros((2, self._mean_squared_displacements.shape[0]))
 
         # If the minimum and maximum contour lengths are set, only color the region between the minimum and maximum, plot
         # the excluded regions in gray and plot vertical lines at the minimum and maximum contour lengths.
@@ -1626,7 +1716,7 @@ class Polydat():
             ci = self._tantan_confidence_intervals
             error = np.abs([self._mean_tantan_correlation - ci[:,0], ci[:,1] - self._mean_tantan_correlation])
         else:
-            error = np.zeros_like(self._mean_tantan_correlation)
+            error = np.zeros((2, self._mean_tantan_correlation.shape[0]))
 
         # If the minimum and maximum contour lengths are set, only color the region between the minimum and maximum, plot
         # the excluded regions in gray and plot vertical lines at the minimum and maximum contour lengths.
@@ -1736,7 +1826,7 @@ class Polydat():
         print(f'Linear Particles:\t\t\t{self._num_particles.get("Linear", 0)}{'\t(Filtered Out)' if 'Linear' not in self._included_classifications else ''}')
         print(f'Branched Particles:\t\t\t{self._num_particles.get("Branched", 0)}{'\t(Filtered Out)' if 'Branched' not in self._included_classifications else ''}')
         print(f'Branched-Looped Particles:\t\t{self._num_particles.get("Branched-Looped", 0)}{'\t(Filtered Out)' if 'Branched-Looped' not in self._included_classifications else ''}')
-        print(f'Looped Particles:\t\t\t{self._num_particles.get("Loop", 0)}{'\t(Filtered Out)' if 'Loop' not in self._included_classifications else ''}')
+        print(f'Looped Particles:\t\t\t{self._num_particles.get("Looped", 0)}{'\t(Filtered Out)' if 'Looped' not in self._included_classifications else ''}')
         print(f'Unknown Particles:\t\t\t{self._num_particles.get("Unknown", 0)}{'\t(Filtered Out)' if 'Unknown' not in self._included_classifications else ''}')
 
     def print_pl_summary(self) -> None:
@@ -1749,7 +1839,7 @@ class Polydat():
             None
         '''
         print('Persistence Length Summary:')
-        if self._included_classifications == ['Linear', 'Branched', 'Loop', 'Branched-Looped', 'Unknown']:
+        if self._included_classifications == ['Linear', 'Branched', 'Looped', 'Branched-Looped', 'Unknown']:
             print('Included Classifications:\t\tAll')
         else:
             print(f'Included Classifications:\t\t{self._included_classifications}')
@@ -1832,6 +1922,14 @@ class Polydat():
         step_size as set in the interpolate_particles method.
         '''
         return self._contour_sampling
+    
+    @property
+    def included_classifications(self) -> list[str]:
+        """
+        list[str]: The current list of particle classifications that are included in
+        the analysis (i.e., after filtering).
+        """
+        return self._included_classifications
 
     @property
     def mean_squared_displacements(self) -> np.ndarray:
@@ -1850,12 +1948,20 @@ class Polydat():
         return self._mean_tantan_correlation
     
     @property
-    def mean_tantan_correlation_std(self) -> np.ndarray:
-        '''
-        The standard deviation of the Tan-Tan correlation of all particles. Calculated by taking the standard deviation of the
-        Tan-Tan correlation for each path in each particle. 
-        '''
-        return self._mean_tantan_correlation_std
+    def min_fitting_length(self) -> float:
+        """
+        float: The minimum contour length (in nm) used when fitting the
+        persistence-length models.
+        """
+        return self._min_fitting_length
+
+    @property
+    def max_fitting_length(self) -> float:
+        """
+        float: The maximum contour length (in nm) used when fitting the
+        persistence-length models.
+        """
+        return self._max_fitting_length
     
     @property
     def R2_fit_result(self) -> lmfit.model.ModelResult:
