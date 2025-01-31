@@ -270,6 +270,7 @@ class Particle():
         
         # Initialize a list to store the displacements for each path.
         displacements = []
+        displacement_matrices = []
 
         # Loop over each path's interpolated skeleton coordinates.
         for coords in self._interp_skeleton_coordinates:
@@ -277,19 +278,20 @@ class Particle():
 
             N = len(coords.T)
 
-            # Compute the displacement matrix
+            # Compute the displacement matrix, and append it to the list.
             diff = coords[:, :, None] - coords[:, None, :]
             sq_diff = np.sum(diff**2, axis=0)
             disp_mat = np.sqrt(sq_diff)
+            displacement_matrices.append(disp_mat)
 
             # The displacments for each subpath are the upper triangle of the displacement matrix.
             disp_values = [disp_mat[i, i:] for i in range(N)]
             
             # Append the displacements for this path to the list.
-            displacements.append(disp_values)         
+            displacements.append(disp_values)
         
-        # Set the displacements attribute.
-        self._displacements = displacements
+        # Set the displacement_matrices attribute.
+        self._displacement_matrices = displacement_matrices
 
         # Return the displacements.
         return displacements
@@ -310,6 +312,7 @@ class Particle():
 
         # Initialize a list to store Tan-Tan correlations for each path.
         tantan_correlations = []
+        dotproduct_matrices = []
 
         # Loop over each path's interpolated skeleton derivative.
         for  derivative in self._interp_skeleton_derivatives:
@@ -328,8 +331,9 @@ class Particle():
             # Get the number of tangent vectors.
             _, N = tangents.shape
             
-            # Computer the dot product matrix
+            # Computer the dot product matrix and append it to the list
             dot_product_matrix = np.dot(tangents.T, tangents)
+            dotproduct_matrices.append(dot_product_matrix)
 
             # The correlations for each subpath are the upper triangle of the dot product matrix.
             corr = [dot_product_matrix[i,i:] for i in range(N)]
@@ -337,8 +341,8 @@ class Particle():
             # Append the correlations for this path to the list.
             tantan_correlations.append(corr)
 
-        # Set the Tan-Tan correlation attribute.
-        self._tantan_correlations = tantan_correlations
+        # Set the dotproduct_matrices attribute.
+        self._dotproduct_matrices = dotproduct_matrices
 
         # Return the Tan-Tan correlations.
         return tantan_correlations
@@ -579,8 +583,8 @@ class Polydat():
         # Set the mean squared displacements attribute.
         self._mean_squared_displacements = None
 
-        # Set the mean Tan-Tan correlation attribute.
-        self._mean_tantan_correlation = None
+        # Set the mean Tan-Tan correlations attribute.
+        self._mean_tantan_correlations = None
 
         # Set the minimum contour length attribute.
         self._min_fitting_length = 0
@@ -961,10 +965,13 @@ class Polydat():
             try:
                 # Attempt to skeletonize the particle.
                 particle.skeletonize_particle(method = method)
+                # If the particle's skeleton contains fewer than 4 pixels, remove the particle from the list.
+                if np.sum(particle.skeleton.skeleton_image) < 4:
+                    self._particles.remove(particle)
             except ValueError:
                 # If the skeletonization fails, remove the particle from the list.
                 self._particles.remove(particle)
-        
+
         # Return the particles.
         return self._particles
 
@@ -1051,39 +1058,34 @@ class Polydat():
         Returns:
             None
         '''
-        # Initialize the unnormalized contour length arryas and displacements array.
+        # Initialize the contour length and displacements array.
         contour_samplings = []
-        ragged_displacements_list = []
+        displacements_list = []
 
-        # Calculate the displacements for each particle matching the classification.
+        # Calculate the displacements and contour samplings for each particle.
         for particle in self._particles:
-            particle.calc_displacements()
+            displacements_list.extend(particle.calc_displacements())
             contour_samplings.extend(particle.contour_samplings)
-            ragged_displacements_list.append(particle.displacements)
-
+        
+        # Pad the contour array so each array is the same size.
         # Find the maximum size of the contour arrays.
         max_size = max([len(contour) for contour in contour_samplings])
         # Pad the contour and displacement arrays so each array is the same size.
-        padded_contours = np.array([
-            np.pad(contour, (0, max_size - len(contour)), 'constant', constant_values = np.nan) for contour in contour_samplings])
+        padded_contours = np.array([np.pad(contour, (0, max_size - len(contour)), 'constant', constant_values = np.nan) for contour in contour_samplings])
         self._padded_contours = padded_contours
         # Get the contour sampling of the longest
         contour_sampling = padded_contours[[~np.isnan(lengths).any() for lengths in padded_contours]][0]
         # Get the contour array containing no nan values. This is the real space lag array.
         self._contour_sampling = contour_sampling
+        
+        # Pad the displacements so each array is the same size.
+        padded_disp= []
+        for displacements in displacements_list:
+            padded = np.array([np.pad(displacement, (0, max_size - len(displacement)), 'constant', constant_values = np.nan) for displacement in displacements])
+            padded_disp.extend(padded)
+        padded_disp = np.array(padded_disp)
 
-        # Unravel the ragged_displacements_list into a more uniform shape.
-        stacked_paths = []
-        for particle_paths in ragged_displacements_list:
-            stacked_paths.extend(particle_paths)
-        padded_disp_set = []
-        for disp_set in stacked_paths:
-            padded_displacemetns = np.array([
-                np.pad(displacement, (0, max_size - len(displacement)), 'constant', constant_values = np.nan) for displacement in disp_set])
-            padded_disp_set.extend(padded_displacemetns)
-        padded_disp_set = np.array(padded_disp_set)
-
-        padded_disp_sq = padded_disp_set**2
+        padded_disp_sq = padded_disp**2
 
         # Calculate the mean squared displacements for each lag.
         self._mean_squared_displacements = np.nanmean(padded_disp_sq, axis = 0)
@@ -1094,8 +1096,6 @@ class Polydat():
 
         # Calculate the standard deviation for error bars.
         self._mean_squared_displacement_std = np.nanstd(padded_disp_sq, axis=0)
-
-        return ragged_displacements_list
     
     def calc_tantan_correlations(self) -> None:
         '''
@@ -1108,57 +1108,43 @@ class Polydat():
         Returns:
             None
         '''
-        # Initialize the unnormalized contour length arrays and correlation arrays
+        # Initialize the contour sampling and correlation arrays
         contour_samplings = []
-        ragged_tantan_correlations = []
+        correlations_list = []
 
-        # Loop over each particle and calculate the Tan-Tan correlation.
+        # Calculate the Tan-Tan correlation and contour sampling for each particle.
         for particle in self.particles:
-            # Calculate the Tan-Tan correlation for the particle.
-            particle_correlations = particle.calc_tantan_correlation()
-
-            # Append the contour samplings and correlations to the lists.
             contour_samplings.extend(particle.contour_samplings)
-            ragged_tantan_correlations.append(particle_correlations)
+            correlations_list.extend(particle.calc_tantan_correlation())
 
         # Find the maximum size of the contour arrays.
         max_size = max([len(contour) for contour in contour_samplings])
         # Pad the contour and correlation arrays so each array is the same size.
-        padded_contours = np.array([
-            np.pad(contour, (0, max_size - len(contour)), 'constant', constant_values = np.nan) for contour in contour_samplings])
+        padded_contours = np.array([np.pad(contour, (0, max_size - len(contour)), 'constant', constant_values = np.nan) for contour in contour_samplings])
         self._padded_contours = padded_contours
-
-        # Unravel the ragged_tantan_correlations into a more uniform shape.
-        stacked_paths = []
-        for particle_paths in ragged_tantan_correlations:
-            stacked_paths.extend(particle_paths)
-        padded_correlation_set = []
-        for corr_set in stacked_paths:
-            padded_correlations = np.array([
-                np.pad(corr, (0, max_size - len(corr)), 'constant', constant_values = np.nan) for corr in corr_set])
-            padded_correlation_set.extend(padded_correlations)
-        padded_correlation_set = np.array(padded_correlation_set)
-
         contour_sampling  = padded_contours[[~np.isnan(lengths).any() for lengths in padded_contours]][0]
         # Get the contour array containing no nan values. This is the real space lag array.
         self._contour_sampling = contour_sampling
 
+        padded_corr = []
+        for correlations in correlations_list:
+            padded_correlations = np.array([np.pad(corr, (0, max_size - len(corr)), 'constant', constant_values = np.nan) for corr in correlations])
+            padded_corr.extend(padded_correlations)
+        padded_corr = np.array(padded_corr)
+
         # Calculate the mean correlation for each lag.
-        mean_tantan_correlation = np.nanmean(padded_correlation_set, axis = 0)
+        mean_tantan_correlation = np.nanmean(padded_corr, axis = 0)
         
         # Calculate the standard deviation for error bars.
-        std_tantan_correlation = np.nanstd(padded_correlation_set, axis = 0)
+        std_tantan_correlation = np.nanstd(padded_corr, axis = 0)
 
         # Calculate the confidence interval for each lag.
-        ci_values = [self.__calc_confidence_interval(padded_correlation_set[:,i][~np.isnan(padded_correlation_set[:,i])]) for i in range(contour_sampling.shape[0])]
+        ci_values = [self.__calc_confidence_interval(padded_corr[:,i][~np.isnan(padded_corr[:,i])]) for i in range(contour_sampling.shape[0])]
         self._tantan_confidence_intervals = np.array(ci_values)
         
         # Set the mean and std Tan-Tan correlation attribute.
-        self._mean_tantan_correlation = mean_tantan_correlation
+        self._mean_tantan_correlations = mean_tantan_correlation
         self._mean_tantan_std = std_tantan_correlation
-        
-        # Return the ragged_tantan_correlations.
-        return ragged_tantan_correlations
 
     def calc_R2_lp(self,
                     lp_init = 10,
@@ -1248,7 +1234,7 @@ class Polydat():
         xvals = self._contour_sampling[inbetween_mask]
 
         # Filter the mean_correlations array to the same size as xvals.
-        yvals = self._mean_tantan_correlation[inbetween_mask]
+        yvals = self._mean_tantan_correlations[inbetween_mask]
 
         # Filter the confidence interval array to the same size as xvals.
         ci = self._tantan_confidence_intervals[inbetween_mask]
@@ -1668,7 +1654,7 @@ class Polydat():
 
         return ax
     
-    def plot_mean_tantan_correlation(self,
+    def plot_mean_tantan_correlations(self,
                                      error_bars: bool = False,
                                      ax: plt.Axes = None,
                                      inc_kwargs: dict = None,
@@ -1714,9 +1700,9 @@ class Polydat():
         if error_bars:
             # error = self._mean_tantan_std
             ci = self._tantan_confidence_intervals
-            error = np.abs([self._mean_tantan_correlation - ci[:,0], ci[:,1] - self._mean_tantan_correlation])
+            error = np.abs([self._mean_tantan_correlations - ci[:,0], ci[:,1] - self._mean_tantan_correlations])
         else:
-            error = np.zeros((2, self._mean_tantan_correlation.shape[0]))
+            error = np.zeros((2, self._mean_tantan_correlations.shape[0]))
 
         # If the minimum and maximum contour lengths are set, only color the region between the minimum and maximum, plot
         # the excluded regions in gray and plot vertical lines at the minimum and maximum contour lengths.
@@ -1728,12 +1714,12 @@ class Polydat():
             
             # Plot the mean Tan-Tan correlation between the minimum and maximum contour lengths with error bars.
             ax.errorbar(self._contour_sampling[inbetween_mask],
-                        self._mean_tantan_correlation[inbetween_mask],
+                        self._mean_tantan_correlations[inbetween_mask],
                         yerr = error[:, inbetween_mask],
                         **inc_kwargs)
             # Plot the mean Tan-Tan correlation outside the minimum and maximum contour lengths with error bars.
             ax.errorbar(self._contour_sampling[~inbetween_mask],
-                        self._mean_tantan_correlation[~inbetween_mask],
+                        self._mean_tantan_correlations[~inbetween_mask],
                         yerr = error[:, ~inbetween_mask],
                         **exc_kwargs)
             
@@ -1744,13 +1730,13 @@ class Polydat():
         else:
             # Plot the mean Tan-Tan correlation with error bars.
             ax.errorbar(self._contour_sampling,
-                        self._mean_tantan_correlation,
+                        self._mean_tantan_correlations,
                         yerr = error,
                         **inc_kwargs)
             
         return ax
 
-    def plot_mean_tantan_correlation_fit(self,
+    def plot_mean_tantan_correlations_fit(self,
                                          ax: plt.Axes = None,
                                          show_init: bool = False,
                                          fit_kwargs: dict = None,
@@ -1945,7 +1931,7 @@ class Polydat():
         The mean Tan-Tan correlation of all particles. Calculated by taking the mean of the Tan-Tan correlation for each
         path in each particle. 
         '''
-        return self._mean_tantan_correlation
+        return self._mean_tantan_correlations
     
     @property
     def min_fitting_length(self) -> float:
