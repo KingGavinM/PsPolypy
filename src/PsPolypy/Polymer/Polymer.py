@@ -661,111 +661,6 @@ class Polydat():
                 The R^2 model value.
         '''
         return 2*2*lp*x * (1 - (2*lp/(x + 1e-10)) * (1 - np.exp(-x / (2*lp))))
-    
-    @staticmethod
-    def __calc_confidence_interval(data, npoints=1000, confidence_level=0.6826):
-        '''
-        Calculate the confidence interval for a given dataset using a Gaussian KDE.
-        The cumulative distribution function (CDF) is approximated by taking the cumulative sum of the PDF and
-        multiplying by the grid spacing. This approximates the lower and upper bounds of the confidence interval,
-        but is less computationally intensive as integrating the KDE for the CDF.
-
-        Args:
-            data (np.ndarray):
-                The data to calculate the confidence interval for.
-            npoints (int):
-                The number of points to evaluate the KDE at. Default is 1000.
-            alpha (float):
-                The confidence level. Default is 0.6826.
-        '''
-
-        # In the case that the data only has a single element, return it as lower and upper bounds.
-        if len(data) < 2:
-            return data[0], data[0]
-        
-        # If the data is all the same, return the value as the lower and upper bounds.
-        if np.isclose(np.var(data),0):
-            return data[0], data[0]
-        
-        # Calculate the KDE
-        kde = gaussian_kde(data)
-
-        # Get the x meshpoints for the KDE
-        x = np.linspace(np.min(data), np.max(data), npoints)
-
-        # Evaluate the PDF at these points (vectorized)
-        pdf_values = kde.evaluate(x)
-
-        # Calculate CDF using cumulative trapezoidal integration
-        cdf = integrate.cumulative_trapezoid(pdf_values, x, initial=0)
-        cdf /= cdf[-1]  # Normalize CDF
-        
-        # Create the Percent Point Function (inverse of CDF)
-        ppf = interpolate.interp1d(cdf, x, kind='linear', bounds_error=False, fill_value=(x[0], x[-1]))
-        
-        # Calculate confidence interval
-        lower_percentile = (1 - confidence_level) / 2
-        upper_percentile = 1 - lower_percentile
-        
-        lower_bound = ppf(lower_percentile)
-        upper_bound = ppf(upper_percentile)
-        
-        return lower_bound, upper_bound
-
-    @staticmethod
-    def __confidence_interval_minimizer(data, ci, model, initial_guess):
-        '''
-        Creates a minimizer for fitting a model to data using the confidence interval as the objective function.
-
-        Args:
-            data (np.ndarray):
-                The data to fit the model to. Shape (2,N).
-            ci (np.ndarray):
-                The confidence interval for the data.
-            model (callable):
-                The model to fit the data to.
-        '''
-        # Unpack the data
-        xvals, yvals = data
-
-        # Define the objective function callable
-        def objective_function(params, x, y, ci, model):
-            '''
-            Objective function for the minimizer. The objective function is the difference between the model
-            and the confidence interval.
-
-            Args:
-                params (lmfit.Parameters):
-                    The parameters to fit.
-                x (np.ndarray):
-                    The x values.
-                y (np.ndarray):
-                    The y values.
-                ci (np.ndarray):
-                    The confidence interval.
-                model (callable):
-                    The model to fit the data to.
-            Returns:
-                np.ndarray:
-                    The objective function values.
-            '''
-            # Set the parameters
-            lp = params['lp'].value
-
-            # Calculate the model values
-            model_values = model(x, lp)
-
-            # Calculate the residuals
-            yerr = np.abs([y - ci.T[0], ci.T[1] - y])
-            residuals = np.where(model_values > y, (model_values - y) / yerr[0], (y - model_values) / yerr[1])
-
-            return residuals
-        
-        # Initialize the parameters
-        params = Parameters()
-        params.add('lp', value=initial_guess, min=0)
-
-        return Minimizer(objective_function, params, fcn_args=(xvals, yvals, ci, model))
 
     #########################
     ##### Class Methods #####
@@ -1086,16 +981,17 @@ class Polydat():
         padded_disp = np.array(padded_disp)
 
         padded_disp_sq = padded_disp**2
+        self._squared_displacements = padded_disp_sq
 
         # Calculate the mean squared displacements for each lag.
         self._mean_squared_displacements = np.nanmean(padded_disp_sq, axis = 0)
 
-        # Calculate the confidence interval for each lag.
-        ci_values = [self.__calc_confidence_interval(padded_disp_sq[:,i][~np.isnan(padded_disp_sq[:,i])]) for i in range(contour_sampling.shape[0])]
-        self._displacement_sq_confidence_intervals = np.array(ci_values)
-
         # Calculate the standard deviation for error bars.
         self._mean_squared_displacement_std = np.nanstd(padded_disp_sq, axis=0)
+
+        # Calculate the SEM for error bars.
+        N = np.sum(~np.isnan(padded_disp_sq), axis=0)
+        self._mean_squared_displacement_sem = self._mean_squared_displacement_std / np.sqrt(N)
     
     def calc_tantan_correlations(self) -> None:
         '''
@@ -1131,25 +1027,23 @@ class Polydat():
             padded_correlations = np.array([np.pad(corr, (0, max_size - len(corr)), 'constant', constant_values = np.nan) for corr in correlations])
             padded_corr.extend(padded_correlations)
         padded_corr = np.array(padded_corr)
+        self._tantan_correlations = padded_corr
 
         # Calculate the mean correlation for each lag.
-        mean_tantan_correlation = np.nanmean(padded_corr, axis = 0)
+        self._mean_tantan_correlations = np.nanmean(padded_corr, axis = 0)
         
         # Calculate the standard deviation for error bars.
-        std_tantan_correlation = np.nanstd(padded_corr, axis = 0)
+        self._mean_tantan_std = np.nanstd(padded_corr, axis = 0)
 
-        # Calculate the confidence interval for each lag.
-        ci_values = [self.__calc_confidence_interval(padded_corr[:,i][~np.isnan(padded_corr[:,i])]) for i in range(contour_sampling.shape[0])]
-        self._tantan_confidence_intervals = np.array(ci_values)
-        
-        # Set the mean and std Tan-Tan correlation attribute.
-        self._mean_tantan_correlations = mean_tantan_correlation
-        self._mean_tantan_std = std_tantan_correlation
+        # Calculate the SEM for error bars.
+        N = np.sum(~np.isnan(padded_corr), axis=0)
+        self._mean_tantan_sem = self._mean_tantan_std / np.sqrt(N)
 
     def calc_R2_lp(self,
                     lp_init = 10,
                     min_fitting_length: float = 0,
-                    max_fitting_length: float = np.inf) -> None:
+                    max_fitting_length: float = np.inf,
+                    **fit_kwargs) -> None:
         '''
         Calculate the persistence length of the polymer particles using the end to end distance squared model. The mean
         squared displacements will only be fit between the minimum and maximum contour lengths. This method uses the lmfit
@@ -1168,7 +1062,7 @@ class Polydat():
             max_fitting_length (float):
                 The maximum contour length to fit the exponential decay to. Default is np.inf.
             fit_kwargs (dict):
-                Keyword arguments to pass to the lmfit Model.fit() method. Default is None.
+                Keyword arguments to pass to the lmfit Model.fit() method.
         Returns:
             None
         '''
@@ -1184,15 +1078,18 @@ class Polydat():
 
         # Filter the mean_squared_displacements array to the same size as xvals.
         yvals = self._mean_squared_displacements[inbetween_mask]
+        
+        # Filter the mean_squared_displacement_sem array to the same size as xvals and invert it to get the weights.
+        weights = 1 / self._mean_squared_displacement_sem[inbetween_mask]
 
-        # Filter the confidence interval array to the same size as xvals.
-        ci = self._displacement_sq_confidence_intervals[inbetween_mask]
+        # Create a Model object
+        model = lmfit.Model(self.__R2_model)
 
-        # Create a Minimizer object for the confidence interval minimizer.
-        minimizer = self.__confidence_interval_minimizer(data = (xvals, yvals), ci = ci, model = self.__R2_model, initial_guess = lp_init)
+        # Create a Parameters object
+        params = model.make_params(lp = lp_init)
 
-        # Perform the minimization.
-        result = minimizer.minimize()
+        # Fit the model to the data.
+        result = model.fit(yvals, params, x = xvals, weights = weights, **fit_kwargs)
 
         # Set the R2_fit_result attribute.
         self._R2_fit_result = result
@@ -1203,7 +1100,8 @@ class Polydat():
     def calc_tantan_lp(self,
                        lp_init = 10,
                        min_fitting_length: float = 0,
-                       max_fitting_length: float = np.inf) -> None:
+                       max_fitting_length: float = np.inf,
+                       **fit_kwargs) -> None:
         '''
         Calculate the persistence length of the polymer particles using the Tan-Tan correlation method. The correlation will
         only be fit between the minimum and maximum contour lengths. This method uses the lmfit package for curve fitting.
@@ -1220,6 +1118,8 @@ class Polydat():
                 The minimum contour length to fit the exponential decay to. Default is 0.
             max_fitting_length (float):
                 The maximum contour length to fit the exponential decay to. Default is np.inf.
+            fit_kwargs (dict):
+                Keyword arguments to pass to the lmfit Model.fit() method.
         Returns:
             None
         '''
@@ -1236,14 +1136,17 @@ class Polydat():
         # Filter the mean_correlations array to the same size as xvals.
         yvals = self._mean_tantan_correlations[inbetween_mask]
 
-        # Filter the confidence interval array to the same size as xvals.
-        ci = self._tantan_confidence_intervals[inbetween_mask]
+        # Filter the mean_tantan_sem array to the same size as xvals and invert it to get the weights.
+        weights = 1 / self._mean_tantan_sem[inbetween_mask]
 
-        # Create a Minimizer object for the confidence interval minimizer.
-        minimizer = self.__confidence_interval_minimizer(data = (xvals, yvals), ci = ci, model = self.__exponential_model, initial_guess = lp_init)
+        # Create a Model object
+        model = lmfit.Model(self.__exponential_model)
 
-        # Perform the minimization.
-        result = minimizer.minimize()
+        # Create a Parameters object
+        params = model.make_params(lp = lp_init)
+
+        # Fit the model to the data.
+        result = model.fit(yvals, params, x = xvals, weights = weights, **fit_kwargs)
 
         # Set the tantan_fit_result attribute.
         self._tantan_fit_result = result
@@ -1570,8 +1473,7 @@ class Polydat():
         # If the error bars are set, the error is the standard error of the mean. Otherwise, the error is 0.
         if error_bars:
             # error = self._mean_squared_displacement_std
-            ci = self._displacement_sq_confidence_intervals
-            error = np.abs([self._mean_squared_displacements - ci[:,0], ci[:,1] - self._mean_squared_displacements])
+            error = self._mean_squared_displacement_sem
         else:
             error = np.zeros((2, self._mean_squared_displacements.shape[0]))
 
@@ -1585,12 +1487,12 @@ class Polydat():
             # Plot the mean Tan-Tan correlation between the minimum and maximum contour lengths with error bars.
             ax.errorbar(self._contour_sampling[inbetween_mask],
                         self._mean_squared_displacements[inbetween_mask],
-                        yerr = error[:,inbetween_mask],
+                        yerr = error[inbetween_mask],
                         **inc_kwargs)
             # Plot the mean Tan-Tan correlation outside the minimum and maximum contour lengths with error bars.
             ax.errorbar(self._contour_sampling[~inbetween_mask],
                         self._mean_squared_displacements[~inbetween_mask],
-                        yerr = error[:,~inbetween_mask],
+                        yerr = error[~inbetween_mask],
                         **exc_kwargs)
             
             # Draw the verical lines for the minimum and maximum contour lengths.
@@ -1699,8 +1601,7 @@ class Polydat():
         # If the error bars are set, the error is the standard error of the mean. Otherwise, the error is 0.
         if error_bars:
             # error = self._mean_tantan_std
-            ci = self._tantan_confidence_intervals
-            error = np.abs([self._mean_tantan_correlations - ci[:,0], ci[:,1] - self._mean_tantan_correlations])
+            error = self._mean_tantan_sem
         else:
             error = np.zeros((2, self._mean_tantan_correlations.shape[0]))
 
@@ -1715,12 +1616,12 @@ class Polydat():
             # Plot the mean Tan-Tan correlation between the minimum and maximum contour lengths with error bars.
             ax.errorbar(self._contour_sampling[inbetween_mask],
                         self._mean_tantan_correlations[inbetween_mask],
-                        yerr = error[:, inbetween_mask],
+                        yerr = error[inbetween_mask],
                         **inc_kwargs)
             # Plot the mean Tan-Tan correlation outside the minimum and maximum contour lengths with error bars.
             ax.errorbar(self._contour_sampling[~inbetween_mask],
                         self._mean_tantan_correlations[~inbetween_mask],
-                        yerr = error[:, ~inbetween_mask],
+                        yerr = error[~inbetween_mask],
                         **exc_kwargs)
             
             # Draw the verical lines for the minimum and maximum contour lengths.
@@ -1858,7 +1759,33 @@ class Polydat():
         self.print_classification_summary()
         print('-'*64)
         self.print_pl_summary()
-        
+
+    def squared_displacements_at_lag(self, lag = 0) -> np.ndarray:
+        '''
+        Return the squared displacements at a given lag time.
+
+        Args:
+            lag (int):
+                The lag time to get the squared displacements at. Default is 0.
+        Returns:
+            np.ndarray:
+                The squared displacements at the given lag time.
+        '''
+        return self._squared_displacements[:, lag][~np.isnan(self._squared_displacements[:, lag])]
+    
+    def tantan_correlations_at_lag(self, lag = 0) -> np.ndarray:
+        '''
+        Return the Tan-Tan correlations at a given lag time.
+
+        Args:
+            lag (int):
+                The lag time to get the Tan-Tan correlations at. Default is 0.
+        Returns:
+            np.ndarray:
+                The Tan-Tan correlations at the given lag time.
+        '''
+        return self._tantan_correlations[:, lag][~np.isnan(self._tantan_correlations[:, lag])]
+
     @property
     def images(self) -> list[np.ndarray]:
         '''
