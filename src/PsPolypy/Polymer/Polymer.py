@@ -5,7 +5,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from scipy.interpolate import splprep, splev
-from scipy import integrate, interpolate
 from scipy.stats import gaussian_kde
 
 from skimage import io
@@ -16,11 +15,9 @@ from skimage.filters import threshold_otsu
 from skimage.measure import label, regionprops
 from skimage.morphology import skeletonize
 
-
 import skan
 import networkx as nx
 import lmfit
-from lmfit import Minimizer, Parameters
 
 __all__ = ['Particle', 'Polydat']
 
