@@ -1,5 +1,6 @@
 from typing import Any, Tuple, Dict
 import copy
+from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -7,9 +8,7 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import splprep, splev
 from scipy.stats import gaussian_kde
 
-from skimage import io
-from skimage.util import img_as_float
-from skimage.color import rgb2gray, rgba2rgb
+from skimage import io, util
 from skimage.transform import resize
 from skimage.filters import threshold_otsu
 from skimage.measure import label, regionprops
@@ -162,6 +161,15 @@ class Particle():
                 classification = 'Branched-Looped'
             else:
                 classification = 'Branched'
+
+            # Check for overlaps, cases in which the polymer folds over itself.
+            deg4_nodes = skan.csr.make_degree_image(self._skeleton.skeleton_image) > 4
+            masked_heights = self._skeleton.skeleton_image * self._image
+            mean_height = np.mean(masked_heights[masked_heights > 0])
+            possible_branches = deg4_nodes * self._image
+
+            if np.max(possible_branches) > 1.5 * mean_height:
+                classification = 'Overlapped'
 
         # Check if the particle is classified as looped:
         elif np.all(unique_branch_types == 3):
@@ -566,10 +574,10 @@ class Polydat():
         self._particles = []
 
         # Set the number of particles attribute.
-        self._num_particles = {'All': 0, 'Linear': 0, 'Branched': 0, 'Looped': 0, 'Branched-Looped': 0, 'Unknown': 0}
+        self._num_particles = {'All': 0, 'Linear': 0, 'Branched': 0, 'Looped': 0, 'Branched-Looped': 0, 'Overlapped': 0, 'Unknown': 0}
 
         # Set the included_classifications attribute.
-        self._included_classifications = ['Linear', 'Branched', 'Looped', 'Branched-Looped', 'Unknown']
+        self._included_classifications = ['Linear', 'Branched', 'Looped', 'Branched-Looped', 'Overlapped', 'Unknown']
 
         # Set the contour lengths attribute.
         self._contour_lengths = None
@@ -611,21 +619,31 @@ class Polydat():
             np.ndarray:
                 The image array.
         '''
+        # Create the Path object from the filepath.
+        fp = Path(filepath)
+        # If the file is a .tif or .tiff stack, handle it by loading all images.
+        if fp.suffix == '.tif' or fp.suffix == '.tiff':
+            # Load the image stack.
+            image_stack = io.imread(fp)
+            image_stack = util.img_as_float(image_stack)
+
+            # Check the shape of the image stack.
+            if len(image_stack.shape) == 3:
+                # If the image stack is 3D, return the image stack transposed to (N, X, Y).
+                return image_stack
+            elif len(image_stack.shape) == 2:
+                # If the image stack is 2D, it's a single image. Return the image.
+                return [image_stack]
+            else:
+                # If the image stack is not 2D or 3D, raise a ValueError. This image cannot be handled.
+                raise ValueError('Tiff is not a stack of Grayscale images or a single Grayscale image. Cannot properly load this image.')
+            
         # Load the image file.
-        image = io.imread(filepath)
-        # Convert the image to grayscale if it is not already.
-        image = img_as_float(image)
-
-        # If the image has 4 channels, convert RGBA to RGB.
-        if image.ndim == 3 and image.shape[-1] == 4:
-            image = rgba2rgb(image)
-
-        # Convert to grayscale if the image is not already.
-        if image.ndim == 3 and image.shape[-1] == 3:
-            image = rgb2gray(image)
+        image = io.imread(fp, as_gray = True)
+        image = util.img_as_float(image)
 
         # Return the image.
-        return image
+        return [image]
     
     @staticmethod
     def __exponential_model(x, lp):
@@ -683,17 +701,42 @@ class Polydat():
             Polydat:
                 The Polydat object.
         '''
+        # Check to make sure that the filepaths are a list.
+        if not isinstance(filepaths, list):
+            raise ValueError('Filepaths must be a list of strings. Did you pass a single string?')
         images = []
         for filepath in filepaths:
             # Load the image using the skimage helper function.
             image = cls.__load_with_skimage(filepath)
 
             # Add the image to the images list.
-            images.append(image)
+            images.extend(image)
             
         # Create the Polydat object.
         return cls(images = images, resolution = resolution, **metadata)
     
+    @classmethod
+    def from_ibw(cls,
+                 filepath: str,
+                 resolution: float,
+                 **metadata: Any) -> 'Polydat':
+        '''
+        Create an instance of the Polydat object from an Igor IBW file.
+        Currently Not Implemented.
+
+        Args:
+            filepath (str):
+                The file path to the IBW file.
+            resolution (float):
+                The resolution of the image in nanometers per pixel.
+            metadata (dict):
+                The metadata associated with the polymer image. Key-value pairs of metadata.
+        Returns:
+            Polydat:
+                The Polydat object.
+        '''
+        raise NotImplementedError('IBW file loading is not yet implemented.')
+
     ########################
     ##### Main Methods #####
     ########################
@@ -722,7 +765,7 @@ class Polydat():
         image = self.__load_with_skimage(filepath)
 
         # Append the image to the images attribute.
-        self._images.append(image)
+        self._images.extend(image)
 
         # Return the images.
         return self._images
@@ -902,8 +945,8 @@ class Polydat():
         '''
         # Check to see if the classifications are valid.
         for classification in classifications:
-            if classification not in ['Linear', 'Branched', 'Looped', 'Branched-Looped', 'Unknown']:
-                raise ValueError(f'Invalid classification: {classification}. Valid classifications are Linear, Branched, Looped, Branched-Looped, and Unknown.')
+            if classification not in ['Linear', 'Branched', 'Looped', 'Branched-Looped', 'Overlapped', 'Unknown']:
+                raise ValueError(f'Invalid classification: {classification}. Valid classifications are Linear, Branched, Looped, Branched-Looped, Overlapped, and Unknown.')
 
         # Set the particles attribute to only include particles with the given classifications.
         self._particles = [particle for particle in self._particles if particle.classification in classifications]
@@ -1472,7 +1515,7 @@ class Polydat():
             # error = self._mean_squared_displacement_std
             error = self._mean_squared_displacement_sem
         else:
-            error = np.zeros((2, self._mean_squared_displacements.shape[0]))
+            error = np.zeros(self._mean_squared_displacements.shape)
 
         # If the minimum and maximum contour lengths are set, only color the region between the minimum and maximum, plot
         # the excluded regions in gray and plot vertical lines at the minimum and maximum contour lengths.
@@ -1600,7 +1643,7 @@ class Polydat():
             # error = self._mean_tantan_std
             error = self._mean_tantan_sem
         else:
-            error = np.zeros((2, self._mean_tantan_correlations.shape[0]))
+            error = np.zeros(self._mean_tantan_correlations.shape)
 
         # If the minimum and maximum contour lengths are set, only color the region between the minimum and maximum, plot
         # the excluded regions in gray and plot vertical lines at the minimum and maximum contour lengths.
@@ -1711,6 +1754,7 @@ class Polydat():
         print(f'Branched Particles:\t\t\t{self._num_particles.get("Branched", 0)}{'\t(Filtered Out)' if 'Branched' not in self._included_classifications else ''}')
         print(f'Branched-Looped Particles:\t\t{self._num_particles.get("Branched-Looped", 0)}{'\t(Filtered Out)' if 'Branched-Looped' not in self._included_classifications else ''}')
         print(f'Looped Particles:\t\t\t{self._num_particles.get("Looped", 0)}{'\t(Filtered Out)' if 'Looped' not in self._included_classifications else ''}')
+        print(f'Overlapped Particles:\t\t\t{self._num_particles.get("Overlapped", 0)}{'\t(Filtered Out)' if 'Overlapped' not in self._included_classifications else ''}')
         print(f'Unknown Particles:\t\t\t{self._num_particles.get("Unknown", 0)}{'\t(Filtered Out)' if 'Unknown' not in self._included_classifications else ''}')
 
     def print_pl_summary(self) -> None:
@@ -1723,7 +1767,7 @@ class Polydat():
             None
         '''
         print('Persistence Length Summary:')
-        if self._included_classifications == ['Linear', 'Branched', 'Looped', 'Branched-Looped', 'Unknown']:
+        if self._included_classifications == ['Linear', 'Branched', 'Looped', 'Branched-Looped', 'Overlapped', 'Unknown']:
             print('Included Classifications:\t\tAll')
         else:
             print(f'Included Classifications:\t\t{self._included_classifications}')
