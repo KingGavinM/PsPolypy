@@ -2,6 +2,8 @@ from typing import Any, Tuple, Dict
 import copy
 from pathlib import Path
 
+import igor2
+
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -646,6 +648,41 @@ class Polydat():
         return [image]
     
     @staticmethod
+    def __load_with_igor(filepath: str,
+                         channel: int) -> Tuple[np.ndarray, float]:
+        '''
+        Load an image file with the igor2 package.
+
+        Args:
+            filepath (str):
+                The file path to the image file.
+            channel (int):
+                The channel of the image to load.
+        Returns:
+            Tuple[np.ndarray, float]:
+                Tuple containing the image array and the resolution of the image.
+        '''
+        # Load the binary wave.
+        wdat = igor2.binarywave.load(filepath)
+
+        # Get the resolution of the image.
+        res_x = wdat['wave']['wave_header']['sfA'][0] * 1e9
+        res_y = wdat['wave']['wave_header']['sfA'][1] * 1e9
+
+        # If the resolution in the x and y directions are not equal, raise a ValueError.
+        if not np.isclose(res_x, res_y, rtol = 1e-3):
+            raise ValueError('Resolution in x and y directions are not equal. Loading IBW Failed.')
+        
+        # Get the image data.
+        image_data = wdat['wave']['wData'][:, :, channel]
+
+        # Normalize the image data.
+        image_data = (image_data - np.min(image_data)) / (np.max(image_data) - np.min(image_data))
+
+        # Return the image data and resolution.
+        return [image_data], res_x
+
+    @staticmethod
     def __exponential_model(x, lp):
         '''
         Exponential decay model for curve fitting.
@@ -716,9 +753,9 @@ class Polydat():
         return cls(images = images, resolution = resolution, **metadata)
     
     @classmethod
-    def from_ibw(cls,
-                 filepath: str,
-                 resolution: float,
+    def from_ibws(cls,
+                 filepaths: list[str],
+                 channel: int,
                  **metadata: Any) -> 'Polydat':
         '''
         Create an instance of the Polydat object from an Igor IBW file.
@@ -727,16 +764,34 @@ class Polydat():
         Args:
             filepath (str):
                 The file path to the IBW file.
-            resolution (float):
-                The resolution of the image in nanometers per pixel.
+            channel (int):
+                Which channel of the IBW to load as the image.
             metadata (dict):
                 The metadata associated with the polymer image. Key-value pairs of metadata.
         Returns:
             Polydat:
                 The Polydat object.
         '''
-        raise NotImplementedError('IBW file loading is not yet implemented.')
+        # Check to make sure that the filepaths are a list.
+        if not isinstance(filepaths, list):
+            raise ValueError('Filepaths must be a list of strings. Did you pass a single string?')
+        images = []
+        resolution = None
+        for filepath in filepaths:
+            # Load the image using the igor2 helper function.
+            image, res = cls.__load_with_igor(filepath, channel)
+            # Check to see if the resolution is set. If not, set it.
+            if resolution is None:
+                resolution = res
+            # Check to see if the resolution of the image matches the resolution of the other images.
+            if resolution != res:
+                raise ValueError('Resolution mismatch. All images must have the same resolution.')
+            # Add the image to the images list.
+            images.extend(image)
 
+        # Create the Polydat object.
+        return cls(images = images, resolution = resolution, **metadata)
+    
     ########################
     ##### Main Methods #####
     ########################
@@ -769,7 +824,36 @@ class Polydat():
 
         # Return the images.
         return self._images
-        
+    
+    def add_ibw(self,
+                filepath: str,
+                channel: int) -> list[np.ndarray]:
+        '''
+        Load an igor IBW file and add it to the images attribute.
+
+        Args:
+            filepath (str):
+                The file path to the IBW file.
+            channel (int):
+                The channel of the IBW to load as the image.
+        Returns:
+            images (list):
+                The list of images.
+        '''
+        # Load the image using the igor2 helper function.
+        image, res = self.__load_with_igor(filepath, channel)
+
+        # Make sure the resolution of the image matches the resolution of the other images.
+        if self._resolution is not None and self._resolution != res:
+            raise ValueError('Resolution mismatch. All images must have the same resolution.')
+        self._resolution = res
+
+        # Append the image to the images attribute.
+        self._images.extend(image)
+
+        # Return the images.
+        return self._images
+
     def upscale(self,
                 magnification: float,
                 order = 3) -> Tuple[list[np.ndarray], float]:
@@ -1014,7 +1098,7 @@ class Polydat():
         self._contour_sampling = contour_sampling
         
         # Pad the displacements so each array is the same size.
-        padded_disp= []
+        padded_disp = []
         for displacements in displacements_list:
             padded = np.array([np.pad(displacement, (0, max_size - len(displacement)), 'constant', constant_values = np.nan) for displacement in displacements])
             padded_disp.extend(padded)
@@ -1136,6 +1220,82 @@ class Polydat():
 
         # Return the fit result.
         return result
+    
+    def calc_R2_lp_nointerp(self,
+                            lp_init = 10,
+                            min_fitting_length: float = 0,
+                            max_fitting_length: float = np.inf,
+                            **fit_kwargs) -> None:
+        '''
+        Calculate the persistence length of the polymer particles using the end to end distance squared model. The mean
+        squared displacements will only be fit between the minimum and maximum contour lengths. This method uses the lmfit
+        package for curve fitting.
+
+        This only calculates the fit for the endpoints of the particles, and does not include any interpolated subpaths
+        along the backbone of the skeleton.
+
+        The persistence length is calculated using the formula:
+        <R^2> = 2*s*Lp*l*(1 - s*Lp/l*(1 - exp(-l/(s*Lp))))
+        where l is the contour length of the skeleton, s is the equilibration constant (1.5 for unequilibrated, and 2 for
+        equilibrated), and Lp is the persistence length.
+
+        Args:
+            lp_init (float):
+                The initial guess for the persistence length. Default is 10.
+            min_fitting_length (float):
+                The minimum contour length to fit the exponential decay to. Default is 0.
+            max_fitting_length (float):
+                The maximum contour length to fit the exponential decay to. Default is np.inf.
+            fit_kwargs (dict):
+                Keyword arguments to pass to the lmfit Model.fit() method.
+        Returns:
+            None
+        '''
+        # Set the minimum and maximum contour lengths attributes for usage in the plotting methods.
+        self._min_fitting_length = min_fitting_length
+        self._max_fitting_length = max_fitting_length
+
+        distances = {}
+        for particle in self._particles:
+            skel_sum = particle.skeleton_summary
+
+            euclidean_distance = skel_sum['euclidean_distance'][0]
+            branch_distance = skel_sum['branch_distance'][0]
+
+            branch_distance = round(branch_distance * 2)/2
+
+            if branch_distance not in distances:
+                distances[branch_distance] = []
+            distances[branch_distance].append(euclidean_distance)
+
+        xvals = np.array(sorted(distances.keys()))
+        yvals = np.array([np.mean(np.array(distances[key])**2) for key in xvals])
+
+        self._mean_squared_displacements = yvals
+        self._contour_sampling = xvals
+
+        ystd = np.array([np.std(np.array(distances[key])**2) for key in xvals])
+        ysem = ystd / np.sqrt([len(distances[key]) for key in xvals])
+
+        self._mean_squared_displacement_sem = ysem
+
+        inbetween_mask = (xvals >= min_fitting_length) * (xvals <= max_fitting_length)
+
+        xvals = xvals[inbetween_mask]
+        yvals = np.array(yvals)[inbetween_mask]
+
+        weights = 1 / ysem[inbetween_mask]
+
+        model = lmfit.Model(self.__R2_model)
+
+        params = model.make_params(lp = lp_init)
+
+        result = model.fit(yvals, params, x = xvals, weights = weights, **fit_kwargs)
+
+        self._R2_fit_result = result
+        
+        return result
+
     
     def calc_tantan_lp(self,
                        lp_init = 10,
@@ -1732,7 +1892,7 @@ class Polydat():
         '''
         print('Image Summary:')
         print(f'Number of Images:\t\t\t{len(self._images)}')
-        print(f'Base Resolution:\t\t\t{self._metadata.get("base_resolution", 0):.1f} nm/pixel')
+        print(f'Base Resolution:\t\t\t{self._metadata.get("base_resolution", 0):.2f} nm/pixel')
         if self._metadata.get('upscaled', False):
             print(f'Upscaled:\t\t\t\t{self._metadata.get("upscaled", False)}')
             print(f'Magnification Factor:\t\t\t{self._metadata.get("magnification", 0):.1f}')

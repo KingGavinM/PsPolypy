@@ -26,6 +26,7 @@ The dependencies for installing PsPolypy is shown below.
 - **nbstripout**
 - **skan**
 - **lmfit**
+- **igor2**
 
 ### Installation Walkthrough
 Create the conda environment by navigating to the `PsPolypy/src/` directory in your terminal and running one of the following:
