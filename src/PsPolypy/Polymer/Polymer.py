@@ -1167,6 +1167,7 @@ class Polydat():
                     lp_init = 10,
                     min_fitting_length: float = 0,
                     max_fitting_length: float = np.inf,
+                    weights = 'SEM',
                     **fit_kwargs) -> None:
         '''
         Calculate the persistence length of the polymer particles using the end to end distance squared model. The mean
@@ -1185,6 +1186,8 @@ class Polydat():
                 The minimum contour length to fit the exponential decay to. Default is 0.
             max_fitting_length (float):
                 The maximum contour length to fit the exponential decay to. Default is np.inf.
+            weights (str):
+                Which paramters to use as the weights for fitting. Default is 'SEM'. Options are 'SEM', 'STD', and 'None'.
             fit_kwargs (dict):
                 Keyword arguments to pass to the lmfit Model.fit() method.
         Returns:
@@ -1203,8 +1206,13 @@ class Polydat():
         # Filter the mean_squared_displacements array to the same size as xvals.
         yvals = self._mean_squared_displacements[inbetween_mask]
         
-        # Filter the mean_squared_displacement_sem array to the same size as xvals and invert it to get the weights.
-        weights = 1 / self._mean_squared_displacement_sem[inbetween_mask]
+        # Dictionary to map the weights parameter to the correct array.
+        weight_dict = {'SEM': 1 / self._mean_squared_displacement_sem[inbetween_mask],
+                       'STD': 1 / self._mean_squared_displacement_std[inbetween_mask],
+                       'None': None}
+        
+        # Get the weights the user has specified.
+        model_weights = weight_dict[weights]
 
         # Create a Model object
         model = lmfit.Model(self.__R2_model)
@@ -1213,7 +1221,7 @@ class Polydat():
         params = model.make_params(lp = lp_init)
 
         # Fit the model to the data.
-        result = model.fit(yvals, params, x = xvals, weights = weights, **fit_kwargs)
+        result = model.fit(yvals, params, x = xvals, weights = model_weights, **fit_kwargs)
 
         # Set the R2_fit_result attribute.
         self._R2_fit_result = result
@@ -1225,6 +1233,7 @@ class Polydat():
                        lp_init = 10,
                        min_fitting_length: float = 0,
                        max_fitting_length: float = np.inf,
+                       weights = 'SEM',
                        **fit_kwargs) -> None:
         '''
         Calculate the persistence length of the polymer particles using the Tan-Tan correlation method. The correlation will
@@ -1242,6 +1251,8 @@ class Polydat():
                 The minimum contour length to fit the exponential decay to. Default is 0.
             max_fitting_length (float):
                 The maximum contour length to fit the exponential decay to. Default is np.inf.
+            weights (str):
+                Which paramters to use as the weights for fitting. Default is 'SEM'. Options are 'SEM', 'STD', and 'None'.
             fit_kwargs (dict):
                 Keyword arguments to pass to the lmfit Model.fit() method.
         Returns:
@@ -1260,8 +1271,13 @@ class Polydat():
         # Filter the mean_correlations array to the same size as xvals.
         yvals = self._mean_tantan_correlations[inbetween_mask]
 
-        # Filter the mean_tantan_sem array to the same size as xvals and invert it to get the weights.
-        weights = 1 / self._mean_tantan_sem[inbetween_mask]
+        # Dictionary to map the weights parameter to the correct array.
+        weight_dict = {'SEM': 1 / self._mean_tantan_sem[inbetween_mask],
+                       'STD': 1 / self._mean_tantan_std[inbetween_mask],
+                       'None': None}
+        
+        # Get the weights the user has specified.
+        model_weights = weight_dict[weights]
 
         # Create a Model object
         model = lmfit.Model(self.__exponential_model)
@@ -1270,7 +1286,7 @@ class Polydat():
         params = model.make_params(lp = lp_init)
 
         # Fit the model to the data.
-        result = model.fit(yvals, params, x = xvals, weights = weights, **fit_kwargs)
+        result = model.fit(yvals, params, x = xvals, weights = model_weights, **fit_kwargs)
 
         # Set the tantan_fit_result attribute.
         self._tantan_fit_result = result
@@ -1553,7 +1569,7 @@ class Polydat():
         return ax
     
     def plot_mean_squared_displacements(self,
-                                        error_bars: bool = False,
+                                        error_bars: str = 'SEM',
                                         ax: plt.Axes = None,
                                         inc_kwargs: dict = None,
                                         exc_kwargs: dict = None,
@@ -1562,8 +1578,8 @@ class Polydat():
         Plot the mean squared displacements for all particles.
 
         Args:
-            error_bars (bool):
-                Whether or not to plot error bars. Default is False.
+            error_bars (str):
+                The type of error bars to plot. Default is 'SEM'. Options are 'SEM', 'STD', and 'None'.
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object to plot the image on.
             inc_kwargs (dict):
@@ -1594,12 +1610,13 @@ class Polydat():
         if vline_kwargs is None:
             vline_kwargs = {'color': 'Blue', 'lw': 0.75, 'dashes': [8,3]}
 
-        # If the error bars are set, the error is the standard error of the mean. Otherwise, the error is 0.
-        if error_bars:
-            # error = self._mean_squared_displacement_std
-            error = self._mean_squared_displacement_sem
-        else:
-            error = np.zeros(self._mean_squared_displacements.shape)
+        # Dictionary to map the error bars parameter to the correct array.
+        error_bar_dict = {'SEM': self._mean_squared_displacement_sem,
+                          'STD': self._mean_squared_displacement_std,
+                          'None': np.zeros(self._mean_squared_displacements.shape)}
+        
+        # Get the error bars the user has specified.
+        error = error_bar_dict[error_bars]
 
         # If the minimum and maximum contour lengths are set, only color the region between the minimum and maximum, plot
         # the excluded regions in gray and plot vertical lines at the minimum and maximum contour lengths.
@@ -1681,7 +1698,7 @@ class Polydat():
         return ax
     
     def plot_mean_tantan_correlations(self,
-                                     error_bars: bool = False,
+                                     error_bars: str = 'SEM',
                                      ax: plt.Axes = None,
                                      inc_kwargs: dict = None,
                                      exc_kwargs: dict = None,
@@ -1690,8 +1707,8 @@ class Polydat():
         Plot the Tan-Tan correlation for all particles.
 
         Args:
-            error_bars (bool):
-                Whether or not to plot error bars. Default is False.
+            error_bars (str):
+                Which error bars to plot. Default is 'SEM'. Options are 'SEM', 'STD', and 'None'.
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object to plot the image on.
             inc_kwargs (dict):
@@ -1722,12 +1739,13 @@ class Polydat():
         if vline_kwargs is None:
             vline_kwargs = {'color': 'Blue', 'lw': 0.75, 'dashes': [8,3]}
 
-        # If the error bars are set, the error is the standard error of the mean. Otherwise, the error is 0.
-        if error_bars:
-            # error = self._mean_tantan_std
-            error = self._mean_tantan_sem
-        else:
-            error = np.zeros(self._mean_tantan_correlations.shape)
+        # Dictionary to map the error bars parameter to the correct array.
+        error_bar_dict = {'SEM': self._mean_tantan_sem,
+                          'STD': self._mean_tantan_std,
+                          'None': np.zeros(self._mean_tantan_correlations.shape)}
+        
+        # Get the error bars the user has specified.
+        error = error_bar_dict[error_bars]
 
         # If the minimum and maximum contour lengths are set, only color the region between the minimum and maximum, plot
         # the excluded regions in gray and plot vertical lines at the minimum and maximum contour lengths.
