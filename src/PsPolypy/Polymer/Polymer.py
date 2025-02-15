@@ -1237,10 +1237,13 @@ class Polydat():
     
     def calc_R2_lp_nointerp(self,
                             lp_init = 10,
+                            step_size: float = 0.5,
                             min_fitting_length: float = 0,
                             max_fitting_length: float = np.inf,
                             **fit_kwargs) -> None:
         '''
+        NOTE: THIS IS HIGHLY BUGGY AND SHOULD BE USED WITH CAUTION.
+        
         Calculate the persistence length of the polymer particles using the end to end distance squared model. The mean
         squared displacements will only be fit between the minimum and maximum contour lengths. This method uses the lmfit
         package for curve fitting.
@@ -1269,6 +1272,9 @@ class Polydat():
         self._min_fitting_length = min_fitting_length
         self._max_fitting_length = max_fitting_length
 
+        # Get the end to end distances of each particle.
+        longest_contour = np.max([particle.skeleton_summary['euclidean_distance'][0] for particle in self._particles])
+        digitizer = np.arange(0, longest_contour, step_size)
         distances = {}
         for particle in self._particles:
             skel_sum = particle.skeleton_summary
@@ -1276,7 +1282,7 @@ class Polydat():
             euclidean_distance = skel_sum['euclidean_distance'][0]
             branch_distance = skel_sum['branch_distance'][0]
 
-            branch_distance = round(branch_distance * 2)/2
+            branch_distance = np.digitize(branch_distance, digitizer)*step_size
 
             if branch_distance not in distances:
                 distances[branch_distance] = []
@@ -1292,6 +1298,7 @@ class Polydat():
         ysem = ystd / np.sqrt([len(distances[key]) for key in xvals])
 
         self._mean_squared_displacement_sem = ysem
+        self._mean_squared_displacement_std = ystd
 
         inbetween_mask = (xvals >= min_fitting_length) * (xvals <= max_fitting_length)
 
@@ -1989,27 +1996,27 @@ class Polydat():
 
     def squared_displacements_at_lag(self, lag = 0) -> np.ndarray:
         '''
-        Return the squared displacements at a given lag time.
+        Return the squared displacements at a given lag.
 
         Args:
             lag (int):
-                The lag time to get the squared displacements at. Default is 0.
+                The lag to get the squared displacements at. Default is 0.
         Returns:
             np.ndarray:
-                The squared displacements at the given lag time.
+                The squared displacements at the given lag.
         '''
         return self._squared_displacements[:, lag][~np.isnan(self._squared_displacements[:, lag])]
     
     def tantan_correlations_at_lag(self, lag = 0) -> np.ndarray:
         '''
-        Return the Tan-Tan correlations at a given lag time.
+        Return the Tan-Tan correlations at a given lag.
 
         Args:
             lag (int):
-                The lag time to get the Tan-Tan correlations at. Default is 0.
+                The lag to get the Tan-Tan correlations at. Default is 0.
         Returns:
             np.ndarray:
-                The Tan-Tan correlations at the given lag time.
+                The Tan-Tan correlations at the given lag.
         '''
         return self._tantan_correlations[:, lag][~np.isnan(self._tantan_correlations[:, lag])]
 
