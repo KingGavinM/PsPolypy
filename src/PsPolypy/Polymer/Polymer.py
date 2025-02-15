@@ -376,6 +376,7 @@ class Particle():
     
     def plot_skeleton(self,
                       ax: plt.Axes = None,
+                      transparent_background: bool = False,
                       **kwargs) -> plt.Axes:
         '''
         Plot the particle skeleton.
@@ -383,6 +384,8 @@ class Particle():
         Args:
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object to plot the image on.
+            transparent_background (bool):
+                Whether to plot the skeleton on a transparent background. Default is False.
             **kwargs:
                 Keyword arguments to pass to matplotlib.pyplot.imshow.
         Returns:
@@ -397,7 +400,10 @@ class Particle():
         ax = ax or plt.gca()
 
         # Plot the skeleton
-        ax.imshow(self.skeleton.skeleton_image, **kwargs)
+        if transparent_background:
+            ax.imshow(self.skeleton.skeleton_image, alpha = self.skeleton.skeleton_image.asdtype(np.float32), **kwargs)
+        else:
+            ax.imshow(self.skeleton.skeleton_image, **kwargs)
         
         # Return the ax.
         return ax
@@ -1415,6 +1421,7 @@ class Polydat():
     def plot_skeleton(self,
                       index: int,
                       ax: plt.Axes = None,
+                      transparent_background: bool = False,
                       **kwargs) -> plt.Axes:
         '''
         Plot the skeleton of a single particle in the particles attribute.
@@ -1424,13 +1431,15 @@ class Polydat():
                 The index of the particle to plot.
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object to plot the image on.
+            transparent_background (bool):
+                Whether or not to plot the skeleton on a transparent background. Default is False.
             **kwargs:
                 Keyword arguments to pass to matplotlib.pyplot.imshow.
         Returns:
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object.
         '''
-        return self._particles[index].plot_skeleton(ax = ax, **kwargs)
+        return self._particles[index].plot_skeleton(ax = ax, transparent_background = transparent_background, **kwargs)
     
     def plot_interpolated_skeleton(self,
                                    index: int,
