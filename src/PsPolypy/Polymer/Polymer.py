@@ -401,7 +401,7 @@ class Particle():
 
         # Plot the skeleton
         if transparent_background:
-            ax.imshow(self.skeleton.skeleton_image, alpha = self.skeleton.skeleton_image.asdtype(np.float32), **kwargs)
+            ax.imshow(self.skeleton.skeleton_image, alpha = self.skeleton.skeleton_image.asdtype(float), **kwargs)
         else:
             ax.imshow(self.skeleton.skeleton_image, **kwargs)
         
@@ -1290,12 +1290,18 @@ class Polydat():
 
         xvals = np.array(sorted(distances.keys()))
         yvals = np.array([np.mean(np.array(distances[key])**2) for key in xvals])
+        ystd = np.array([np.std(np.array(distances[key])**2) for key in xvals])
+        ysem = ystd / np.sqrt([len(distances[key]) for key in xvals]) + 1e-10
+
+        counts = np.array([len(distances[key]) for key in xvals])
+
+        xvals = xvals[counts > 1]
+        yvals = yvals[counts > 1]
+        ysem = ysem[counts > 1]
+        ystd = ystd[counts > 1]
 
         self._mean_squared_displacements = yvals
         self._contour_sampling = xvals
-
-        ystd = np.array([np.std(np.array(distances[key])**2) for key in xvals])
-        ysem = ystd / np.sqrt([len(distances[key]) for key in xvals])
 
         self._mean_squared_displacement_sem = ysem
         self._mean_squared_displacement_std = ystd
@@ -1950,7 +1956,7 @@ class Polydat():
         print(f'Overlapped Particles:\t\t\t{self._num_particles.get("Overlapped", 0)}{'\t(Filtered Out)' if 'Overlapped' not in self._included_classifications else ''}')
         print(f'Unknown Particles:\t\t\t{self._num_particles.get("Unknown", 0)}{'\t(Filtered Out)' if 'Unknown' not in self._included_classifications else ''}')
 
-    def print_pl_summary(self) -> None:
+    def print_lp_summary(self) -> None:
         '''
         Print a summary of the persistence length calculations.
 
@@ -1967,13 +1973,25 @@ class Polydat():
         print(f'Minimum Fitting Contour Length:\t\t{self._min_fitting_length:.1f} nm')
         print(f'Maximum Fitting Contour Length:\t\t{self._max_fitting_length:.1f} nm')
         try:
-            print(f'R^2 lp:\t\t\t\t\t{self._R2_fit_result.params["lp"].value * self._resolution:.1f} +/- {self._R2_fit_result.params["lp"].stderr * self._resolution:.1f} nm')
-            print(f'R^2 Reduced Chi^2:\t\t\t{self._R2_fit_result.redchi:.2f}')
+            rdchi2 = self._R2_fit_result.redchi
+            if rdchi2 > 1.0:
+                scaled_std_r2 = self._R2_fit_result.params["lp"].stderr * self._resolution * np.sqrt(rdchi2)
+            else:
+                scaled_std_r2 = self._R2_fit_result.params["lp"].stderr * self._resolution
+            print(f'E2E Distance Sq lp:\t\t\t{self._R2_fit_result.params["lp"].value * self._resolution:.1f} +/- {scaled_std_r2:.1f} nm')
+            print(f'E2E Distance Sq Reduced Chi^2:\t\t{self._R2_fit_result.redchi:.2f}')
+            print(f'E2E Distance Sq R^2:\t\t\t{self._R2_fit_result.rsquared:.2f}')
         except AttributeError:
             pass
         try:
-            print(f'Tan-Tan Correlation lp:\t\t\t{self._tantan_fit_result.params["lp"].value * self._resolution:.1f} +/- {self._tantan_fit_result.params["lp"].stderr * self._resolution:.1f} nm')
+            rdchi2 = self._tantan_fit_result.redchi
+            if rdchi2 > 1.0:
+                scaled_std_tantan = self._tantan_fit_result.params["lp"].stderr * self._resolution * np.sqrt(rdchi2)
+            else:
+                scaled_std_tantan = self._tantan_fit_result.params["lp"].stderr * self._resolution
+            print(f'Tan-Tan Correlation lp:\t\t\t{self._tantan_fit_result.params["lp"].value * self._resolution:.1f} +/- {scaled_std_tantan:.1f} nm')
             print(f'Tan-Tan Correlation Reduced Chi^2:\t{self._tantan_fit_result.redchi:.2f}')
+            print(f'Tan-Tan Correlation R^2:\t\t{self._tantan_fit_result.rsquared:.2f}')
         except AttributeError:
             pass
 
@@ -1992,7 +2010,7 @@ class Polydat():
         print('-'*64)
         self.print_classification_summary()
         print('-'*64)
-        self.print_pl_summary()
+        self.print_lp_summary()
 
     def squared_displacements_at_lag(self, lag = 0) -> np.ndarray:
         '''
