@@ -992,10 +992,15 @@ class Polydat():
                 particle.skeletonize_particle(method = method)
                 # If the particle's skeleton contains fewer than 4 pixels, remove the particle from the list.
                 if np.sum(particle.skeleton.skeleton_image) < 4:
+                    # If the skeleton has fewer than 4 pixels, remove the particle from the list.
                     self._particles.remove(particle)
+                    # Decrement the number of particles attribute.
+                    self._num_particles['All'] -= 1
             except ValueError:
                 # If the skeletonization fails, remove the particle from the list.
                 self._particles.remove(particle)
+                # Decrement the number of particles attribute.
+                self._num_particles['All'] -= 1
 
         # Return the particles.
         return self._particles
