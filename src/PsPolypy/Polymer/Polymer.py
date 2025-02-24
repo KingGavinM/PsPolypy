@@ -401,7 +401,7 @@ class Particle():
 
         # Plot the skeleton
         if transparent_background:
-            ax.imshow(self.skeleton.skeleton_image, alpha = self.skeleton.skeleton_image.asdtype(float), **kwargs)
+            ax.imshow(self.skeleton.skeleton_image, alpha = self.skeleton.skeleton_image.astype(float), **kwargs)
         else:
             ax.imshow(self.skeleton.skeleton_image, **kwargs)
         
