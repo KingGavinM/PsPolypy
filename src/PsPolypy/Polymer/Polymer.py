@@ -1178,7 +1178,7 @@ class Polydat():
                     lp_init = 10,
                     min_fitting_length: float = 0,
                     max_fitting_length: float = np.inf,
-                    weights = 'SEM',
+                    weights = 'None',
                     **fit_kwargs) -> None:
         '''
         Calculate the persistence length of the polymer particles using the end to end distance squared model. The mean
@@ -1198,7 +1198,7 @@ class Polydat():
             max_fitting_length (float):
                 The maximum contour length to fit the exponential decay to. Default is np.inf.
             weights (str):
-                Which paramters to use as the weights for fitting. Default is 'SEM'. Options are 'SEM', 'STD', and 'None'.
+                Which paramters to use as the weights for fitting. Default is 'None'. Options are 'SEM', 'STD', and 'None'.
             fit_kwargs (dict):
                 Keyword arguments to pass to the lmfit Model.fit() method.
         Returns:
@@ -1332,7 +1332,7 @@ class Polydat():
                        lp_init = 10,
                        min_fitting_length: float = 0,
                        max_fitting_length: float = np.inf,
-                       weights = 'SEM',
+                       weights = 'None',
                        **fit_kwargs) -> None:
         '''
         Calculate the persistence length of the polymer particles using the Tan-Tan correlation method. The correlation will
@@ -1351,7 +1351,7 @@ class Polydat():
             max_fitting_length (float):
                 The maximum contour length to fit the exponential decay to. Default is np.inf.
             weights (str):
-                Which paramters to use as the weights for fitting. Default is 'SEM'. Options are 'SEM', 'STD', and 'None'.
+                Which paramters to use as the weights for fitting. Default is 'None'. Options are 'SEM', 'STD', and 'None'.
             fit_kwargs (dict):
                 Keyword arguments to pass to the lmfit Model.fit() method.
         Returns:
@@ -1671,7 +1671,7 @@ class Polydat():
         return ax
     
     def plot_mean_squared_displacements(self,
-                                        error_bars: str = 'SEM',
+                                        error_bars: str = 'None',
                                         ax: plt.Axes = None,
                                         inc_kwargs: dict = None,
                                         exc_kwargs: dict = None,
@@ -1681,7 +1681,7 @@ class Polydat():
 
         Args:
             error_bars (str):
-                The type of error bars to plot. Default is 'SEM'. Options are 'SEM', 'STD', and 'None'.
+                The type of error bars to plot. Default is 'None'. Options are 'SEM', 'STD', and 'None'.
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object to plot the image on.
             inc_kwargs (dict):
@@ -1800,7 +1800,7 @@ class Polydat():
         return ax
     
     def plot_mean_tantan_correlations(self,
-                                     error_bars: str = 'SEM',
+                                     error_bars: str = 'None',
                                      ax: plt.Axes = None,
                                      inc_kwargs: dict = None,
                                      exc_kwargs: dict = None,
@@ -1810,7 +1810,7 @@ class Polydat():
 
         Args:
             error_bars (str):
-                Which error bars to plot. Default is 'SEM'. Options are 'SEM', 'STD', and 'None'.
+                Which error bars to plot. Default is 'None'. Options are 'SEM', 'STD', and 'None'.
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object to plot the image on.
             inc_kwargs (dict):
