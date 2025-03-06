@@ -1,6 +1,6 @@
 # PsPolypy
 Polymer Analysis and Persistence calculation in python
-
+![READMEimage](misc/readmeimg.svg)
 ## Table of Contents
 - [Installation](#installation)
     - [Dependencies](#dependencies)
@@ -29,22 +29,27 @@ The dependencies for installing PsPolypy is shown below.
 - **igor2**
 
 ### Installation Walkthrough
-Create the conda environment by navigating to the `PsPolypy/src/` directory in your terminal and running one of the following:
+Clone the repository. Either download the code as a .zip and unzip the contents, or run the following in your terminal:
+```bash
+git clone https://github.com/KingGavinM/PsPolypy.git
+```
 
+Create the conda environment by navigating to the `src/` directory in your terminal and running one of the following:
 ```bash
 # If you wish to use the default environment name
 conda env create -f PsPolypy.yml
-
+```
+```bash
 # If you want to use a custom environment name
 conda env create -f PsPolypy.yml -n your_environment_name
 ```
 
-Activate the conda environment by running:
-
+Activate the conda environment by running either:
 ```bash
 # If using the default environment name
 conda activate PsPolypy
-
+```
+```bash
 # Or, if you created a custom environment name
 conda activate your_environment_name
 ```
@@ -70,7 +75,7 @@ pspolypy                  x.y.z                    pypi_0     pypi
 If the previous test succeeded, you are now ready to use PsPolypy!
 
 ## Usage
-PsPolypy is a package for the automated detection, classification, and persistence length calculation of polymers. For an in depth tutorial see ```PsPolypy/tutorials/PsPolypy-Tutorial.ipynb```.
+PsPolypy is a package for the automated detection, classification, and persistence length calculation of polymers. For an interactive tutorial see ```tutorial/PsPolypy-Tutorial.ipynb```.
 
 ## License
 PsPolypy - Polymer Analysis and Persistence calculation in python
