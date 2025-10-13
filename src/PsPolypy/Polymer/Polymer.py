@@ -247,10 +247,10 @@ class Particle():
             contour_samplings.append(contour_actual)
 
             # Append the interpolated skeleton coordinates for this path.
-            interp_skeleton_coordinates.append(splev(contour_normalized, tck))
+            interp_skeleton_coordinates.append(np.array(splev(contour_normalized, tck)))
 
             # Append the interpolated derivative for this path.
-            interp_skeleton_derivatives.append(splev(contour_normalized, tck, der=1))
+            interp_skeleton_derivatives.append(np.array(splev(contour_normalized, tck, der=1)))
 
         # Set the attributes
         self._contour_samplings = contour_samplings
@@ -353,6 +353,43 @@ class Particle():
 
         # Return the Tan-Tan correlations.
         return tantan_correlations
+    
+    def calc_radius_of_gyration(self,
+                                interp: bool = False) -> float:
+        '''
+        Calculate the radius of gyration of the particle.
+
+        Args:
+            interp (bool):
+                Whether to use the interpolated skeleton coordinates to calculate the radius of gyration. Default is False.
+        Returns:
+            Rg (float):
+                The radius of gyration of the particle.
+        '''
+        if interp:
+            if self._interp_skeleton_coordinates is None:
+                raise ValueError('Interpolated skeleton coordinates attribute is not set. Interpolate the skeleton before calculating the radius of gyration.')
+            
+            # Concatenate all interpolated skeleton coordinates into a single array.
+            coords = np.hstack(self._interp_skeleton_coordinates).T
+        else:
+            # Check to see if the skeleton is set. If not, raise a ValueError.
+            if self._skeleton is None:
+                raise ValueError('Skeleton attribute is not set. Skeletonize the particle before calculating the radius of gyration.')
+            coords = self._skeleton.coordinates
+            
+        # Calculate the center of mass of the skeleton coordinates.
+        center_of_mass = np.mean(coords, axis = 0)
+
+        # Calculate the radius of gyration.
+        squared_distances = np.sum((coords - center_of_mass)**2, axis = 1)
+        Rg = np.sqrt(np.mean(squared_distances))
+
+        # Set the radius of gyration attribute.
+        self._radius_of_gyration = Rg
+
+        # Return the radius of gyration.
+        return Rg
 
     def plot_particle(self,
                       ax: plt.Axes = None,
@@ -534,7 +571,13 @@ class Particle():
         The Tan-Tan correlation of each path in the particle.
         '''
         return self._tantan_correlations
-   
+    @property
+    def radius_of_gyration(self) -> float:
+        '''
+        The radius of gyration of the particle.
+        '''
+        return self._radius_of_gyration
+
 class Polydat():
     '''
     Polymer data class. Used for processing a multiple polymer field images. Includes a list of polymer full field images,
@@ -1173,6 +1216,19 @@ class Polydat():
         # Calculate the SEM for error bars.
         N = np.sum(~np.isnan(padded_corr), axis=0)
         self._mean_tantan_sem = self._mean_tantan_std / np.sqrt(N)
+
+    def calc_radius_of_gyrations(self,
+                                 interp: bool = False) -> None:
+        '''
+        Calculate the radius of gyration for each particle in the particles attribute.
+        
+        Args:
+            interp (bool):
+                Whether to use the interpolated skeleton coordinates to calculate the radius of gyration. Default is False.
+        Returns:
+            None
+        '''
+        self._radius_of_gyrations = np.array([particle.calc_radius_of_gyration(interp=interp) for particle in self.particles])
 
     def calc_R2_lp(self,
                     lp_init = 10,
@@ -1975,6 +2031,11 @@ class Polydat():
             print('Included Classifications:\t\tAll')
         else:
             print(f'Included Classifications:\t\t{self._included_classifications}')
+        try:
+            Rg = self._radius_of_gyrations * self._resolution
+            print(f'Mean Radius of Gyration:\t\t{np.nanmean(Rg):.1f} +/- {np.nanstd(Rg)/np.sqrt(len(Rg)):.1f} nm')
+        except AttributeError:
+            pass
         print(f'Minimum Fitting Contour Length:\t\t{self._min_fitting_length:.1f} nm')
         print(f'Maximum Fitting Contour Length:\t\t{self._max_fitting_length:.1f} nm')
         try:
@@ -2116,6 +2177,14 @@ class Polydat():
         path in each particle. 
         '''
         return self._mean_tantan_correlations
+    
+    @property
+    def radius_of_gyrations(self) -> np.ndarray:
+        '''
+        The radius of gyrations of all particles. Calculated by taking the radius of gyration for each
+        path in each particle. 
+        '''
+        return self._radius_of_gyrations
     
     @property
     def min_fitting_length(self) -> float:
