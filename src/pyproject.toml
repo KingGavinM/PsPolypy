@@ -1,0 +1,32 @@
+[build-system]
+requires = ['setuptools>=64', 'wheel']
+build-backend = 'setuptools.build_meta'
+
+[project]
+name = 'PsPolypy'
+version = '1.0.0'
+description = 'Polymer analysis and persistence calculation in Python.'
+authors =[
+    {name = 'Creighton M. Lisowski', email = 'clisowski@missouri.edu'}
+]
+requires-python = '>=3.9'
+classifiers = [
+  'License :: OSI Approved :: GNU General Public License v3 (GPLv3)',
+  'Programming Language :: Python :: 3',
+  'Topic :: Scientific/Engineering :: Physics'
+]
+keywords = [
+    'atomic-force-microscopy',
+    'AFM',
+    'polymer-physics',
+    'persistence-length',
+    'polymer-analysis',
+    'image-analysis',
+    'biophysics'
+]
+
+[project.urls]
+Homepage = 'https://github.com/KingGavinM/PsPolypy'
+
+[tool.setuptools.packages.find]
+exclude = ['tests*']

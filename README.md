@@ -77,6 +77,13 @@ If the previous test succeeded, you are now ready to use PsPolypy!
 ## Usage
 PsPolypy is a package for the automated detection, classification, and persistence length calculation of polymers. For an interactive tutorial see ```tutorial/PsPolypy-Tutorial.ipynb```.
 
+## Citation
+
+If you use *PsPolypy* in academic work, please cite:
+
+Elizabeth A. Conley, Creighton M. Lisowski, Katherine G. Schaefer, Harrison C. Davison, Julie Baguio, Ioan Kosztin,Gavin M. King (2025). *PS Poly: A chain tracing algorithm to determine persistence length and categorize complex polymers by shape.* 
+bioRxiv. https://doi.org/10.1101/2024.05.06.592664
+
 ## License
 PsPolypy - Polymer Analysis and Persistence calculation in python
 
