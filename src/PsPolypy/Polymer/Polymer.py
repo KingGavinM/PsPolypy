@@ -72,35 +72,11 @@ class Particle():
         # Set the binary mask attribute.
         self._binary_mask = binary_mask
 
-        # Set the skeleton attribute.
-        self._skeleton = None
-
-        # Set the skeleton summary attribute.
-        self._skeleton_summary = None
-
         # Set the classification attribute.
         self._classification = classification
 
         # Set the particle id attribute.
         self._id = id
-
-        # Set the contour sampling attribute.
-        self._contour_sampling = None
-
-        # Set the contour lengths attribute.
-        self._contour_lengths = None
-
-        # Set the interpolated skeleton coordinates attribute.
-        self._interp_skeleton_coordinates = None
-
-        # Set the interpolated skeleton derivatives attribute.
-        self._interp_skeleton_derivatives = None
-
-        # Set the displacements attribute.
-        self._displacements = None
-
-        # Set the Tan-Tan correlation attribute.
-        self._tantan_correlations = None
 
     def skeletonize_particle(self,
                              method: str = 'zhang') -> Tuple[skan.Skeleton, 'pandas.DataFrame']: # type: ignore
@@ -263,17 +239,17 @@ class Particle():
 
     def calc_displacements(self) -> list[np.ndarray]:
         '''
-        Calculate the displacment along the contour for each path in the particle.
+        Calculate the displacments for each subpath along each path in the particle.
 
         Args:
             None
         Returns:
-            (list):
-                List of displacements for each path in the particle.
+            displacements (list):
+                List of displacements for each subpath in each path in the particle.
         '''
         # Check to see if the interpolated skeleton coordinates are set. If not, raise a ValueError.
         if self._interp_skeleton_coordinates is None:
-            raise ValueError('Interpolated skeleton coordinates attribute is not set. Interpolate the skeleton before calculating the persistence length.')
+            raise ValueError('Interpolated skeleton coordinates attribute is not set. Interpolate the skeleton before calculating the displacements.')
         
         # Initialize a list to store the displacements for each path.
         displacements = []
@@ -300,22 +276,25 @@ class Particle():
         # Set the displacement_matrices attribute.
         self._displacement_matrices = displacement_matrices
 
+        # Set the displacements attribute.
+        self._displacements = displacements
+
         # Return the displacements.
         return displacements
 
     def calc_tantan_correlation(self) -> list[np.ndarray]:
         '''
-        Calculate the tangent-tangent correlation for each path in the particle and set the tantan_correlations attribute.
+        Calculate the tangent-tangent correlation for each subpath in each path in the particle and set the tantan_correlations attribute.
 
         Args:
             None
         Returns:
-            (list):
-                List of Tan-Tan correlations for each path in the particle
+            tantan_correlations (list):
+                List of Tan-Tan correlations for each subpath in each path in the particle
         '''
         # Check to see if the interpolated skeleton derivatives are set. If not, raise a ValueError.
         if self._interp_skeleton_derivatives is None:
-            raise ValueError('Interpolated skeleton derivatives attribute is not set. Interpolate the skeleton before calculating the persistence length.')
+            raise ValueError('Interpolated skeleton derivatives attribute is not set. Interpolate the skeleton before calculating the tangent-tangent correlations.')
 
         # Initialize a list to store Tan-Tan correlations for each path.
         tantan_correlations = []
@@ -351,45 +330,76 @@ class Particle():
         # Set the dotproduct_matrices attribute.
         self._dotproduct_matrices = dotproduct_matrices
 
+        # Set the tantan_correlations attribute.
+        self._tantan_correlations = tantan_correlations
+
         # Return the Tan-Tan correlations.
         return tantan_correlations
     
-    def calc_radius_of_gyration(self,
-                                interp: bool = False) -> float:
+    def calc_radius_of_gyrations(self) -> list[np.ndarray]:
         '''
-        Calculate the radius of gyration of the particle.
+        Calculate the radius of gyration for each subpath in each path in the particle.
 
         Args:
-            interp (bool):
-                Whether to use the interpolated skeleton coordinates to calculate the radius of gyration. Default is False.
+            None
         Returns:
-            Rg (float):
-                The radius of gyration of the particle.
+            radius_of_gyrations (list):
+                List of radius of gyrations for each subpath in each path in the particle.
         '''
-        if interp:
-            if self._interp_skeleton_coordinates is None:
-                raise ValueError('Interpolated skeleton coordinates attribute is not set. Interpolate the skeleton before calculating the radius of gyration.')
-            
-            # Concatenate all interpolated skeleton coordinates into a single array.
-            coords = np.hstack(self._interp_skeleton_coordinates).T
-        else:
-            # Check to see if the skeleton is set. If not, raise a ValueError.
-            if self._skeleton is None:
-                raise ValueError('Skeleton attribute is not set. Skeletonize the particle before calculating the radius of gyration.')
-            coords = self._skeleton.coordinates
-            
-        # Calculate the center of mass of the skeleton coordinates.
-        center_of_mass = np.mean(coords, axis = 0)
+        # Check to see if the interpolated skeleton coordinates are set. If not, raise a ValueError.
+        if self._interp_skeleton_coordinates is None:
+            raise ValueError('Interpolated skeleton coordinates attribute is not set. Interpolate the skeleton before calculating the radius of gyrations.')
 
-        # Calculate the radius of gyration.
-        squared_distances = np.sum((coords - center_of_mass)**2, axis = 1)
-        Rg = np.sqrt(np.mean(squared_distances))
+        # Initialize a list to store the radius of gyrations for each subpath in each path.
+        radius_of_gyrations = []
+        rg_matrices = []
 
-        # Set the radius of gyration attribute.
-        self._radius_of_gyration = Rg
+        # Loop over each path's interpolated skeleton coordinates.
+        for coords in self._interp_skeleton_coordinates:
+                n_points = coords.shape[1]
 
-        # Return the radius of gyration.
-        return Rg
+                # Cumulative sums of positions and |r|^2, padded with a leading zero
+                padded_positions = np.hstack([np.zeros((2, 1), dtype=coords.dtype),np.cumsum(coords, axis=1)])
+
+                # Cumulative sum of squared radii, padded with a leading zero
+                padded_squared_radius = np.concatenate([[0.0],np.cumsum(np.sum(coords**2, axis=0))])
+
+                # All start/end index pairs (i, j)
+                idx = np.arange(n_points)
+                start_idx = np.minimum(idx[:, None], idx[None, :])
+                end_idx   = np.maximum(idx[:, None], idx[None, :])
+                segment_length = (end_idx - start_idx + 1).astype(float)  # (N, N), ≥ 1 always
+
+                # Map to padded cumulative indices: sum(i..j) = S[j+1] - S[i]
+                start_pad = start_idx
+                end_pad   = end_idx + 1
+
+                # Center of mass for each subpath
+                subpath_com = (padded_positions[:, end_pad] - padded_positions[:, start_pad]) / segment_length
+
+                # Mean squared radius for each subpath
+                mean_squared_radius = (padded_squared_radius[end_pad] - padded_squared_radius[start_pad]) / segment_length
+
+                # Radius of matrix for each subpath
+                rg_mat = np.sqrt(np.maximum(mean_squared_radius - np.sum(subpath_com**2, axis=0), 0.0))
+
+                # The radius of gyration for each subpath is the upper triangle of the radius of gyration matrix
+                rg_upper_triangle = [rg_mat[i, i:] for i in range(n_points)]
+
+                # Append the radius of gyrations for this path to the list
+                radius_of_gyrations.append(rg_upper_triangle)
+
+                # Append the radius of gyration matrix for this path to the list
+                rg_matrices.append(rg_mat)
+
+        # Set the radius_of_gyrations attribute
+        self._radius_of_gyrations = radius_of_gyrations
+
+        # Set the radius_of_gyration_matrices attribute
+        self._radius_of_gyration_matrices = rg_matrices
+
+        # Return the radius of gyrations.
+        return radius_of_gyrations
 
     def plot_particle(self,
                       ax: plt.Axes = None,
@@ -566,17 +576,39 @@ class Particle():
         return self._displacements
     
     @property
+    def displacement_matrices(self) -> list[np.ndarray]:
+        '''
+        The displacement matrices of each path in the particle.
+        '''
+        return self._displacement_matrices
+    
+    @property
     def tantan_correlations(self) -> list[np.ndarray]:
         '''
         The Tan-Tan correlation of each path in the particle.
         '''
         return self._tantan_correlations
+    
     @property
-    def radius_of_gyration(self) -> float:
+    def dotproduct_matrices(self) -> list[np.ndarray]:
         '''
-        The radius of gyration of the particle.
+        The dot product matrices of each path in the particle.
         '''
-        return self._radius_of_gyration
+        return self._dotproduct_matrices
+
+    @property
+    def radius_of_gyrations(self) -> list[np.ndarray]:
+        '''
+        The radius of gyrations for each path in the particle.
+        '''
+        return self._radius_of_gyrations
+    
+    @property
+    def radius_of_gyration_matrices(self) -> list[np.ndarray]:
+        '''
+        The radius of gyration matrices for each path in the particle.
+        '''
+        return self._radius_of_gyration_matrices
 
 class Polydat():
     '''
@@ -761,7 +793,38 @@ class Polydat():
             float:
                 The R^2 model value.
         '''
-        return 2*2*lp*x * (1 - (2*lp/(x + 1e-10)) * (1 - np.exp(-x / (2*lp))))
+        return 4 * lp * x - 8 * (lp**2) * (1 - np.exp(-x / (2*lp)))
+    
+    @staticmethod
+    def __Rg_model(x, lp):
+        '''
+        Radius of gyration model for curve fitting.
+
+        Args:
+            x (float):
+                The x value.
+            lp (float):
+                The persistence length.
+        Returns:
+            float:
+                The Rg model value.
+        '''
+        x = np.asarray(x, dtype=float)
+
+        out = np.empty_like(x, dtype=float)
+        # threshold where we trust the series expansion
+        small = x < 1e-3 * lp  
+
+        # small-L series: Rg^2 ≈ L^2 / 12
+        out[small] = x[small]**2 / 12.0
+
+        # full expression for larger L
+        X = x[~small]
+        out[~small] = (2 * lp * X / 3
+                    - 4 * lp**2
+                    + 16 * lp**3 / X
+                    - 32 * lp**4 / X**2 * (1 - np.exp(-X / (2*lp))))
+        return out
 
     #########################
     ##### Class Methods #####
@@ -1217,25 +1280,57 @@ class Polydat():
         N = np.sum(~np.isnan(padded_corr), axis=0)
         self._mean_tantan_sem = self._mean_tantan_std / np.sqrt(N)
 
-    def calc_radius_of_gyrations(self,
-                                 interp: bool = False) -> None:
+    def calc_radius_of_gyrations(self) -> None:
         '''
-        Calculate the radius of gyration for each particle in the particles attribute.
-        
+        Calculate the radius of gyrations for a set of particles. The radius of gyration is calculated for each path in
+        each particle. The radius of gyrations are then averaged over all particles. The standard deviation and standard
+        error of the mean are also calculated.
+
         Args:
-            interp (bool):
-                Whether to use the interpolated skeleton coordinates to calculate the radius of gyration. Default is False.
+            None
         Returns:
             None
         '''
-        self._radius_of_gyrations = np.array([particle.calc_radius_of_gyration(interp=interp) for particle in self.particles])
+        # Initialize the contour length and radius of gyration array.
+        contour_samplings = []
+        rg_list = []
+
+        # Calculate the radius of gyration and contour samplings for each particle.
+        for particle in self.particles:
+            contour_samplings.extend(particle.contour_samplings)
+            rg_list.extend(particle.calc_radius_of_gyrations())
+        
+        # Find the maximum size of the contour arrays.
+        max_size = max([len(contour) for contour in contour_samplings])
+        # Pad the contour and radius of gyration arrays so each array is the same size.
+        padded_contours = np.array([np.pad(contour, (0, max_size - len(contour)), 'constant', constant_values = np.nan) for contour in contour_samplings])
+        self._padded_contours = padded_contours
+        contour_sampling = padded_contours[[~np.isnan(lengths).any() for lengths in padded_contours]][0]
+        # Get the contour array containing no nan values. This is the real space lag array.
+        self._contour_sampling = contour_sampling
+
+        padded_rg = []
+        for rg in rg_list:
+            padded_rgs = np.array([np.pad(rg_val, (0, max_size - len(rg_val)), 'constant', constant_values = np.nan) for rg_val in rg])
+            padded_rg.extend(padded_rgs)
+        padded_rg = np.array(padded_rg)
+        self._radius_of_gyrations = padded_rg
+
+        # Calculate the mean radius of gyration for each lag.
+        self._mean_squared_radius_of_gyrations = np.nanmean(padded_rg**2, axis = 0)
+
+        # Calculate the standard deviation and SEM for error bars.
+        self._mean_squared_radius_of_gyration_std = np.nanstd(padded_rg, axis=0)
+
+        N = np.sum(~np.isnan(padded_rg), axis=0)
+        self._mean_squared_radius_of_gyration_sem = self._mean_squared_radius_of_gyration_std / np.sqrt(N)
 
     def calc_R2_lp(self,
                     lp_init = 10,
                     min_fitting_length: float = 0,
                     max_fitting_length: float = np.inf,
                     weights = 'None',
-                    **fit_kwargs) -> None:
+                    **fit_kwargs) -> lmfit.model.ModelResult:
         '''
         Calculate the persistence length of the polymer particles using the end to end distance squared model. The mean
         squared displacements will only be fit between the minimum and maximum contour lengths. This method uses the lmfit
@@ -1250,9 +1345,9 @@ class Polydat():
             lp_init (float):
                 The initial guess for the persistence length. Default is 10.
             min_fitting_length (float):
-                The minimum contour length to fit the exponential decay to. Default is 0.
+                The minimum contour length to fit the R2 model. Default is 0.
             max_fitting_length (float):
-                The maximum contour length to fit the exponential decay to. Default is np.inf.
+                The maximum contour length to fit the R2 model. Default is np.inf.
             weights (str):
                 Which paramters to use as the weights for fitting. Default is 'None'. Options are 'SEM', 'STD', and 'None'.
             fit_kwargs (dict):
@@ -1301,7 +1396,7 @@ class Polydat():
                             step_size: float = 0.5,
                             min_fitting_length: float = 0,
                             max_fitting_length: float = np.inf,
-                            **fit_kwargs) -> None:
+                            **fit_kwargs) -> lmfit.model.ModelResult:
         '''
         NOTE: THIS IS HIGHLY BUGGY AND SHOULD BE USED WITH CAUTION.
         
@@ -1389,7 +1484,7 @@ class Polydat():
                        min_fitting_length: float = 0,
                        max_fitting_length: float = np.inf,
                        weights = 'None',
-                       **fit_kwargs) -> None:
+                       **fit_kwargs) -> lmfit.model.ModelResult:
         '''
         Calculate the persistence length of the polymer particles using the Tan-Tan correlation method. The correlation will
         only be fit between the minimum and maximum contour lengths. This method uses the lmfit package for curve fitting.
@@ -1445,6 +1540,71 @@ class Polydat():
 
         # Set the tantan_fit_result attribute.
         self._tantan_fit_result = result
+
+        # Return the fit result.
+        return result
+    
+    def calc_Rg_lp(self,
+                   lp_init = 10,
+                   min_fitting_length: float = 0,
+                   max_fitting_length: float = np.inf,
+                   weights = 'None',
+                    **fit_kwargs) -> lmfit.model.ModelResult:
+        '''
+        Calculate the persistence length of the polymer particles using the radius of gyration method. The Rg will
+        only be fit between the minimum and maximum contour lengths. This method uses the lmfit package for curve fitting.
+
+        The persistence length is calculated using the formula:
+        <Rg^2> = L*s*Lp/3 - (s*Lp)^2 + 2*(s*Lp)^3/L*(1 - s*Lp/L*(1 - exp(-L/(s*Lp))))
+        where L is the contour length of the skeleton, s is the equilibration constant (1.5 for unequilibrated, and 2 for
+        equilibrated), and Lp is the persistence length.
+
+        Args:
+            lp_init (float):
+                The initial guess for the persistence length. Default is 10.
+            min_fitting_length (float):
+                The minimum contour length to fit the Rg model. Default is 0.
+            max_fitting_length (float):
+                The maximum contour length to fit the Rg model. Default is np.inf.
+            weights (str):
+                Which paramters to use as the weights for fitting. Default is 'None'. Options are 'SEM', 'STD', and 'None'.
+            fit_kwargs (dict):
+                Keyword arguments to pass to the lmfit Model.fit() method.
+        Returns:
+            None
+        '''
+        # Get the mask for the xvalues between the minimum and maximum contour lengths.
+        inbetween_mask = (self._contour_sampling >= min_fitting_length) * (self._contour_sampling <= max_fitting_length)
+
+        # Set the minimum and maximum contour lengths attributes for usage in the plotting methods.
+        self._min_fitting_length = min_fitting_length
+        self._max_fitting_length = max_fitting_length
+
+        # Filter the xvals array to between the minimum and maximum contour lengths.
+        xvals = self._contour_sampling[inbetween_mask]
+
+        # Filter the mean_correlations array to the same size as xvals.
+        yvals = self._mean_squared_radius_of_gyrations[inbetween_mask]
+
+        # Dictionary to map the weights parameter to the correct array.
+        weight_dict = {'SEM': 1 / self._mean_squared_radius_of_gyration_sem[inbetween_mask],
+                       'STD': 1 / self._mean_squared_radius_of_gyration_std[inbetween_mask],
+                       'None': None}
+
+        # Get the weights the user has specified.
+        model_weights = weight_dict[weights]
+
+        # Create a Model object
+        model = lmfit.Model(self.__Rg_model)
+
+        # Create a Parameters object
+        params = model.make_params(lp = lp_init)
+
+        # Fit the model to the data.
+        result = model.fit(yvals, params, x = xvals, weights = model_weights, **fit_kwargs)
+
+        # Set the Rg_fit_result attribute.
+        self._Rg_fit_result = result
 
         # Return the fit result.
         return result
@@ -1981,6 +2141,129 @@ class Polydat():
 
         return ax
     
+    def plot_mean_squared_radius_of_gyrations(self,
+                                              error_bars: str = 'None',
+                                              ax: plt.Axes = None,
+                                              inc_kwargs: dict = None,
+                                              exc_kwargs: dict = None,
+                                              vline_kwargs: dict = None) -> plt.Axes:
+        '''
+        Plot the mean squared radius of gyrations for all particles.
+
+        Args:
+            error_bars (str):
+                Which error bars to plot. Default is 'None'. Options are 'SEM', 'STD', and 'None'.
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object to plot the image on.
+            inc_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.errorbar for the included data points. (Between the
+                minimum and maximum contour lengths used for fitting) If the minimum and maximum contour lengths are 0 and
+                np.inf, these kwargs will be used for the entire dataset.
+                Default is None.
+            exc_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.errorbar for the excluded data points. (Outside the minimum
+                and maximum contour lengths used for fitting)
+                Default is None.
+            vline_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.axvline for the vertical line indicating the fitting range.
+                Default is None.
+        Returns:
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object.
+        '''
+        # Create the ax object if it is not set.
+        ax = ax or plt.gca()
+
+        # Handle the default kwargs if they are none.
+        if inc_kwargs is None:
+            inc_kwargs = {'color': 'Blue', 'fmt': '.', 'ecolor': 'Blue', 'lw': 0.7, 'label': 'Fitted Data'}
+        if exc_kwargs is None:
+            exc_kwargs = {'color': 'Gray', 'fmt': '.', 'ecolor': 'Gray', 'lw': 0.7, 'label': 'Excluded Data'}
+        if vline_kwargs is None:
+            vline_kwargs = {'color': 'Blue', 'lw': 0.75, 'dashes': [8,3]}
+
+        # Dictionary to map the error bars parameter to the correct array.
+        error_bar_dict = {'SEM': self._mean_squared_radius_of_gyration_sem,
+                          'STD': self._mean_squared_radius_of_gyration_std,
+                          'None': np.zeros(self._mean_squared_radius_of_gyrations.shape)}
+        
+        # Get the error bars the user has specified.
+        error = error_bar_dict[error_bars]
+
+        # If the minimum and maximum contour lengths are set, only color the region between the minimum and maximum, plot
+        # the excluded regions in gray and plot vertical lines at the minimum and maximum contour lengths.
+        if self._min_fitting_length != 0 or self._max_fitting_length != np.inf:
+            # Get the mask for the xvalues in between the min and max contour lengths
+            inbetween_mask = (self._contour_sampling >= self._min_fitting_length) * (self._contour_sampling <= self._max_fitting_length)
+
+            # Plot the mean squared radius of gyration between the minimum and maximum contour lengths with error bars.
+            ax.errorbar(self._contour_sampling[inbetween_mask],
+                        self._mean_squared_radius_of_gyrations[inbetween_mask],
+                        yerr = error[inbetween_mask],
+                        **inc_kwargs)
+            # Plot the mean squared radius of gyration outside the minimum and maximum contour lengths with error bars.
+            ax.errorbar(self._contour_sampling[~inbetween_mask],
+                        self._mean_squared_radius_of_gyrations[~inbetween_mask],
+                        yerr = error[~inbetween_mask],
+                        **exc_kwargs)
+            
+            # Draw the verical lines for the minimum and maximum contour lengths.
+            ax.axvline(self._min_fitting_length, **vline_kwargs)
+            ax.axvline(self._max_fitting_length, **vline_kwargs)
+        else:
+            # Plot the mean squared radius of gyration with error bars.
+            ax.errorbar(self._contour_sampling,
+                        self._mean_squared_radius_of_gyrations,
+                        yerr = error,
+                        **inc_kwargs)
+        
+        return ax
+    
+    def plot_mean_squared_radius_of_gyrations_fit(self,
+                                                  ax: plt.Axes = None,
+                                                  show_init: bool = False,
+                                                  fit_kwargs: dict = None,
+                                                  init_kwargs: dict = None) -> plt.Axes:
+        '''
+        Plot the fitted Rg model of the mean squared radius of gyrations.
+        Args:
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object to plot the image on.
+            show_init (bool):
+                Whether or not to show the initial guess of the Rg model. Default is False.
+            fit_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.plot for the fitted Rg model.
+                Default is None.
+            init_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.plot for the initial guess of the Rg model.
+                Only used if show_init is True.
+                Default is None.
+        Returns:
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object.
+        '''
+        # Create the ax object if it is not set.
+        ax = ax or plt.gca()
+
+        # Handle the default kwargs if they are none.
+        if fit_kwargs is None:
+            fit_kwargs = {'color': 'Red', 'lw': 1.5, 'label': 'Best Fit'}
+        if init_kwargs is None:
+            init_kwargs = {'color': 'Red', 'lw': 0.75, 'linestyle': '--', 'label': 'Initial Guess'}
+
+        # Plot the fitted Rg model.
+        x_ = self._contour_sampling
+        y_ = self.__Rg_model(self._contour_sampling, self._Rg_fit_result.params['lp'].value)
+        ax.plot(x_,y_,**fit_kwargs)
+
+        # If show_init is true, also plot the initial guess.
+        if show_init:
+            ax.plot(self._contour_sampling,
+                    self.__Rg_model(self._contour_sampling, self._Rg_fit_result.params['lp'].init_value),
+                    **init_kwargs)
+        
+        return ax
+
     def print_image_summary(self) -> None:
         '''
         Print a summary of the polymer image data.
@@ -2031,11 +2314,6 @@ class Polydat():
             print('Included Classifications:\t\tAll')
         else:
             print(f'Included Classifications:\t\t{self._included_classifications}')
-        try:
-            Rg = self._radius_of_gyrations * self._resolution
-            print(f'Mean Radius of Gyration:\t\t{np.nanmean(Rg):.1f} +/- {np.nanstd(Rg)/np.sqrt(len(Rg)):.1f} nm')
-        except AttributeError:
-            pass
         print(f'Minimum Fitting Contour Length:\t\t{self._min_fitting_length:.1f} nm')
         print(f'Maximum Fitting Contour Length:\t\t{self._max_fitting_length:.1f} nm')
         try:
@@ -2058,6 +2336,17 @@ class Polydat():
             print(f'Tan-Tan Correlation lp:\t\t\t{self._tantan_fit_result.params["lp"].value * self._resolution:.1f} +/- {scaled_std_tantan:.1f} nm')
             print(f'Tan-Tan Correlation Reduced Chi^2:\t{self._tantan_fit_result.redchi:.2f}')
             print(f'Tan-Tan Correlation R^2:\t\t{self._tantan_fit_result.rsquared:.2f}')
+        except AttributeError:
+            pass
+        try:
+            rdchi2 = self._Rg_fit_result.redchi
+            if rdchi2 > 1.0:
+                scaled_std_rg = self._Rg_fit_result.params["lp"].stderr * self._resolution * np.sqrt(rdchi2)
+            else:
+                scaled_std_rg = self._Rg_fit_result.params["lp"].stderr * self._resolution
+            print(f'Radius of Gyration lp:\t\t\t{self._Rg_fit_result.params["lp"].value * self._resolution:.1f} +/- {scaled_std_rg:.1f} nm')
+            print(f'Radius of Gyration Reduced Chi^2:\t{self._Rg_fit_result.redchi:.2f}')
+            print(f'Radius of Gyration R^2:\t\t\t{self._Rg_fit_result.rsquared:.2f}')
         except AttributeError:
             pass
 

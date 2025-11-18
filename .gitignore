@@ -8,3 +8,6 @@ build/
 # Ignore other temporary Jupyter Notebook files
 **/*.pyc
 **/__pycache__/
+
+# Ignore playground files
+playground/
