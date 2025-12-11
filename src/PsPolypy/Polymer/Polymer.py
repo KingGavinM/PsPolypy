@@ -40,7 +40,7 @@ class Particle():
                  image: np.ndarray,
                  resolution: float,
                  bbox: Tuple[int, int, int, int],
-                 binary_mask: np.ndarray = None,
+                 binary_mask: np.ndarray,
                  classification: str = None,
                  id: int = None) -> None:
         '''
@@ -70,7 +70,14 @@ class Particle():
         self._bbox = bbox
 
         # Set the binary mask attribute.
-        self._binary_mask = binary_mask
+        # This is a patch for a bug in which sometimes the global otsu threshold is not a good threshold for an
+        # individual particle. We recalculate the otsu per particle.  This might be better handled in a separate
+        # function, but would require some refactoring.
+        # Calculate the Otsu threshold for the individual particle image.
+        threshold = threshold_otsu(self._image)
+        individual_binary_mask = self._image > threshold
+        # Make the binary mask the intersection of the provided binary mask and the Otsu thresholded mask.
+        self._binary_mask = np.logical_and(binary_mask, individual_binary_mask)
 
         # Set the classification attribute.
         self._classification = classification
@@ -452,6 +459,34 @@ class Particle():
         else:
             ax.imshow(self.skeleton.skeleton_image, **kwargs)
         
+        # Return the ax.
+        return ax
+    
+    def plot_binary_mask(self,
+                         ax: plt.Axes = None,
+                         **kwargs) -> plt.Axes:
+        '''
+        Plot the binary mask of the particle.
+        
+        Args:
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object to plot the image on.
+            **kwargs:
+                Keyword arguments to pass to matplotlib.pyplot.imshow.
+        Returns:
+            ax (matplotlib.axes.Axes):
+                The matplotlib axis object.
+        '''
+        # Create the ax object if it is not set.
+        ax = ax or plt.gca()
+
+        # Check to see if the binary mask is set. If not, raise a ValueError.
+        if self._binary_mask is None:
+            raise ValueError('Binary mask attribute is not set. Set the binary mask before plotting.')
+        
+        # Plot the binary mask.
+        ax.imshow(self._binary_mask, **kwargs)
+
         # Return the ax.
         return ax
     
