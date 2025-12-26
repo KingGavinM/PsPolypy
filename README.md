@@ -1,5 +1,5 @@
 # PsPolypy
-Polymer Analysis and Persistence calculation in python
+Polymer Architecture Analysis and Persistence and Radius of Gyration Calculations in Python
 ![READMEimage](misc/readmeimg.svg)
 ## Table of Contents
 - [Installation](#installation)
