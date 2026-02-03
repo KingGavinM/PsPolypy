@@ -2005,16 +2005,24 @@ class Polydat():
     def plot_mean_squared_displacements_fit(self,
                                             ax: plt.Axes = None,
                                             show_init: bool = False,
-                                            fit_kwargs: dict = None,
-                                            init_kwargs: dict = None,) -> plt.Axes:
+                                            show_ci: bool = False,
+                                            show_pb: bool = False,
+                                            fit_kwargs: dict = {},
+                                            init_kwargs: dict = {},
+                                            ci_kwargs: dict = {},
+                                            pb_kwargs: dict = {}) -> plt.Axes:
         '''
         Plot the fitted R2 model of the mean squared displacements.
 
         Args:
             ax (matplotlib.axes.Axes):
-                The matplotlib axis object to plot the image on.
+                The matplotlib axis object to draw to.
             show_init (bool):
                 Whether or not to show the initial guess of the R2 model. Default is False.
+            show_ci (bool):
+                Whether or not to show the confidence interval of the R2 model. Default is False.
+            show_pb (bool):
+                Whether or not to show the prediction band of the R2 model. Default is False.
             fit_kwargs (dict):
                 Keyword arguments to pass to matplotlib.pyplot.plot for the fitted R2 model.
                 Default is None.
@@ -2022,6 +2030,10 @@ class Polydat():
                 Keyword arguments to pass to matplotlib.pyplot.plot for the initial guess of the R2 model.
                 Only used if show_init is True.
                 Default is None.
+            ci_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.fill_between for the confidence interval of the R2 model
+            pb_kwargs (dict):
+                Keyword arguments to pass to matplotlib.pyplot.fill_between for the prediction band of the R2 model
         Returns:
             ax (matplotlib.axes.Axes):
                 The matplotlib axis object.
@@ -2032,10 +2044,14 @@ class Polydat():
         ax = ax or plt.gca()
 
         # Handle the default kwargs if they are none.
-        if fit_kwargs is None:
+        if fit_kwargs == {}:
             fit_kwargs = {'color': 'Red', 'lw': 1.5, 'label': 'Best Fit'}
-        if init_kwargs is None:
+        if init_kwargs == {}:
             init_kwargs = {'color': 'Red', 'lw': 0.75, 'linestyle': '--', 'label': 'Initial Guess'}
+        if ci_kwargs == {}:
+            ci_kwargs = {'color': 'Cyan', 'alpha': 0.5, 'label': '95% Confidence Interval'}
+        if pb_kwargs == {}:
+            pb_kwargs = {'color': 'Pink', 'alpha': 0.5, 'label': '95% Prediction Band'}
 
         # Plot the fitted R2 model.
         x_ = self._contour_sampling
@@ -2047,7 +2063,29 @@ class Polydat():
             ax.plot(self._contour_sampling,
                     self.__R2_model(self._contour_sampling, self._R2_fit_result.params['lp'].init_value),
                     **init_kwargs)
+        
+        # If show_ci is true, also plot the confidence interval.
+        if show_ci:
+            lp_hat = self._R2_fit_result.params['lp'].value
+            se_lp = self._R2_fit_result.params['lp'].stderr
+            se_lp = se_lp * max(1.0, np.sqrt(self._R2_fit_result.redchi))
+            dydlp = (self.__R2_model(x_, lp_hat + 1e-8) - self.__R2_model(x_, lp_hat - 1e-8)) / (2 * 1e-8)
 
+            ci_halfwidth = 1.96 * np.abs(dydlp) * se_lp
+            
+            ax.fill_between(x_, y_ - ci_halfwidth, y_ + ci_halfwidth, **ci_kwargs)
+
+        # If show_pb is true, also plot the prediction band.
+        if show_pb:
+            residual = self._R2_fit_result.residual
+            se_lp = self._R2_fit_result.params['lp'].stderr * max(1.0, np.sqrt(self._R2_fit_result.redchi))
+            weights = self._R2_fit_result.weights
+            residual_variance = np.var(residual/weights, ddof = 1)
+            dydlp = (self.__R2_model(x_, self._R2_fit_result.params['lp'].value + 1e-8) - self.__R2_model(x_, self._R2_fit_result.params['lp'].value - 1e-8)) / (2 * 1e-8)
+            pred_sd = np.sqrt((np.abs(dydlp)*se_lp)**2 + residual_variance + self._mean_squared_displacement_sem**2)
+
+            ax.fill_between(x_, y_ - 1.96*pred_sd, y_ + 1.96*pred_sd, **pb_kwargs)
+            
         return ax
     
     def plot_mean_tantan_correlations(self,
@@ -2135,14 +2173,18 @@ class Polydat():
     def plot_mean_tantan_correlations_fit(self,
                                          ax: plt.Axes = None,
                                          show_init: bool = False,
-                                         fit_kwargs: dict = None,
-                                         init_kwargs: dict = None,) -> plt.Axes:
+                                         show_ci: bool = False,
+                                         show_pb: bool = False,
+                                         fit_kwargs: dict = {},
+                                         init_kwargs: dict = {},
+                                         ci_kwargs: dict = {},
+                                         pb_kwargs: dict = {}) -> plt.Axes:
         '''
         Plot the fitted exponential decay of the mean Tan-Tan correlation.
 
         Args:
             ax (matplotlib.axes.Axes):
-                The matplotlib axis object to plot the image on.
+                The matplotlib axis object to draw to.
             fit_kwargs (dict):
                 Keyword arguments to pass to matplotlib.pyplot.plot for the fitted exponential decay.
                 Default is None.
@@ -2158,10 +2200,14 @@ class Polydat():
         ax = ax or plt.gca()
 
         # Handle the default kwargs if they are none.
-        if fit_kwargs is None:
+        if fit_kwargs == {}:
             fit_kwargs = {'color': 'Red', 'lw': 1.5, 'label': 'Best Fit'}
-        if init_kwargs is None:
+        if init_kwargs == {}:
             init_kwargs = {'color': 'Red', 'lw': 0.75, 'linestyle': '--', 'label': 'Initial Guess'}
+        if ci_kwargs == {}:
+            ci_kwargs = {'color': 'Cyan', 'alpha': 0.5, 'label': '95% Confidence Interval'}
+        if pb_kwargs == {}:
+            pb_kwargs = {'color': 'Pink', 'alpha': 0.5, 'label': '95% Prediction Band'}
 
         # Plot the fitted exponential model.
         x_ = self._contour_sampling
@@ -2173,6 +2219,28 @@ class Polydat():
             ax.plot(x_,
                     self.__exponential_model(self._contour_sampling, self._tantan_fit_result.params['lp'].init_value),
                     **init_kwargs)
+            
+        # If show_ci is true, also plot the confidence interval.
+        if show_ci:
+            lp_hat = self._tantan_fit_result.params['lp'].value
+            se_lp = self._tantan_fit_result.params['lp'].stderr
+            se_lp = se_lp * max(1.0, np.sqrt(self._tantan_fit_result.redchi))
+            dydlp = (self.__exponential_model(x_, lp_hat + 1e-8) - self.__exponential_model(x_, lp_hat - 1e-8)) / (2 * 1e-8)
+
+            ci_halfwidth = 1.96 * np.abs(dydlp) * se_lp
+
+            ax.fill_between(x_, y_ - ci_halfwidth, y_ + ci_halfwidth, **ci_kwargs)
+        
+        # If show_pb is true, also plot the prediction band.
+        if show_pb:
+            residual = self._tantan_fit_result.residual
+            se_lp = self._tantan_fit_result.params['lp'].stderr * max(1.0, np.sqrt(self._tantan_fit_result.redchi))
+            weights = self._tantan_fit_result.weights
+            residual_variance = np.var(residual/weights, ddof = 1)
+            dydlp = (self.__exponential_model(x_, self._tantan_fit_result.params['lp'].value + 1e-8) - self.__exponential_model(x_, self._tantan_fit_result.params['lp'].value - 1e-8)) / (2 * 1e-8)
+            pred_sd = np.sqrt((np.abs(dydlp)*se_lp)**2 + residual_variance + self._mean_tantan_sem**2)
+
+            ax.fill_between(x_, y_ - 1.96*pred_sd, y_ + 1.96*pred_sd, **pb_kwargs)
 
         return ax
     
