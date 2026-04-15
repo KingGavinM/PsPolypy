@@ -81,8 +81,8 @@ PsPolypy is a package for the automated detection, classification, and persisten
 
 If you use *PsPolypy* in academic work, please cite:
 
-Elizabeth A. Conley, Creighton M. Lisowski, Katherine G. Schaefer, Harrison C. Davison, Julie Baguio, Ioan Kosztin,Gavin M. King (2025). *PS Poly: A chain tracing algorithm to determine persistence length and categorize complex polymers by shape.* 
-bioRxiv. https://doi.org/10.1101/2024.05.06.592664
+Elizabeth A. Conley, Creighton M. Lisowski, Katherine G. Schaefer, Harrison C. Davison, Julie Baguio, Ioan Kosztin, & Gavin M. King (2026). *PS Poly: A chain tracing algorithm to determine persistence length and categorize complex polymers by shape.* 
+PLOS One, Vol. 21, Issue 2, Pages e0341464. [https://doi.org/10.1101/2024.05.06.592664]   (https://doi.org/10.1371/journal.pone.0341464) 
 
 ## License
 PsPolypy - Polymer Analysis and Persistence calculation in python
@@ -100,4 +100,9 @@ For questions, feedback, or contributions, feel free to reach out:
 
 **Creighton M. Lisowski**
 
-Email: CLisowski@missouri.edu
+Email: CLisowski@missouri.edu 
+
+or 
+
+**Gavin King** 
+kinggm@missouri.edu
